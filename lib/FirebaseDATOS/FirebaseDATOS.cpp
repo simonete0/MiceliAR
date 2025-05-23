@@ -1,4 +1,12 @@
 #include "FirebaseDATOS.h"
+#include "addons/TokenHelper.h"
+
+// Implementación del callback estático
+void FirebaseDatos::_tokenStatusCallback(TokenInfo info) {
+    if (info.status == token_status_error) {
+        Serial.printf("Token error: %s\n", getTokenError(info).c_str());
+    }
+}
 
 FirebaseDatos::FirebaseDatos() {
     // Constructor
@@ -18,14 +26,13 @@ void FirebaseDatos::begin(const char* ssid, const char* password,
     _config.database_url = databaseUrl;
     _auth.user.email = email;
     _auth.user.password = passwordAuth;
-    _config.token_status_callback = tokenStatusCallback;
+    _config.token_status_callback = _tokenStatusCallback;
     
     Firebase.begin(&_config, &_auth);
     while (!Firebase.ready()) {
         delay(300);
     }
     
-    // Obtener últimos valores
     _getLastValues();
 }
 
@@ -46,7 +53,6 @@ bool FirebaseDatos::_getLastValues() {
 }
 
 bool FirebaseDatos::shouldUpdate(float newTemp, float newHumidity) {
-    // Comprobar si hay cambios significativos
     return (abs(newTemp - _lastTemp) >= 1.0) || 
            (abs(newHumidity - _lastHumidity) >= 2.0);
 }
@@ -64,11 +70,8 @@ bool FirebaseDatos::sendData(float temperature, float humidity) {
     String path = "lecturas/" + String(millis());
     
     if(Firebase.RTDB.setJSON(&_fbdo, path, &json)) {
-        // Actualizar últimos valores
         _lastTemp = temperature;
         _lastHumidity = humidity;
-        
-        // Guardar también como última lectura
         Firebase.RTDB.setJSON(&_fbdo, "/ultima_lectura", &json);
         return true;
     }

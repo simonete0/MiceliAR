@@ -3,7 +3,6 @@
 
 #include <Arduino.h>
 #include <Firebase_ESP_Client.h>
-#include "addons/TokenHelper.h"
 
 class FirebaseDatos {
 public:
@@ -24,7 +23,8 @@ private:
     float _lastTemp = 0;
     float _lastHumidity = 0;
     
-    bool _getLastValues();
+    bool _getLastValues();  // Cambiado a público temporalmente para pruebas
+    static void _tokenStatusCallback(TokenInfo info);
 };
 
 #endif
