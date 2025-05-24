@@ -24,7 +24,7 @@ void setup() {
 }
 
 void loop() {
-    delay(2000); // Espera entre lecturas
+    delay(4000); // Espera entre lecturas
     
     dhtSensor.leerValores();
     float temperatura = dhtSensor.getTemperatura();
