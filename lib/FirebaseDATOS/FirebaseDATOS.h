@@ -15,8 +15,8 @@ public:
               const char* email, const char* passwordAuth);
     
     bool isReady();
-    bool sendData(float temperature, float humidity);
-    bool shouldUpdate(float newTemp, float newHumidity);
+    bool sendData(float temperature, float humidity, float co2 = -1);
+    bool shouldUpdate(float newTemp, float newHumidity, float newCO2 = -1);
     
 private:
     WiFiUDP ntpUDP;
@@ -27,6 +27,7 @@ private:
     
     float lastTemp;
     float lastHumidity;
+    float lastCO2;
     
     bool getLastValues();
     static void tokenStatusCallback(TokenInfo info);

@@ -4,7 +4,8 @@
 FirebaseDatos::FirebaseDatos() 
     : timeClient(ntpUDP, "pool.ntp.org"), 
       lastTemp(0), 
-      lastHumidity(0) {
+      lastHumidity(0),
+      lastCO2(-1) { // Inicializar CO2 como -1 (no disponible)
 }
 
 String FirebaseDatos::getCurrentDate() {
@@ -16,6 +17,7 @@ String FirebaseDatos::getCurrentDate() {
     strftime(dateString, sizeof(dateString), "%Y-%m-%d", ptm);
     return String(dateString);
 }
+
 
 String FirebaseDatos::getCurrentTime() {
     timeClient.update();
@@ -72,16 +74,22 @@ bool FirebaseDatos::getLastValues() {
         lastHumidity = fbdo.floatData();
     }
     
+    if(Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/co2")) {
+        lastCO2 = fbdo.floatData();
+    }
     return true;
 }
 
-bool FirebaseDatos::shouldUpdate(float newTemp, float newHumidity) {
-    return (abs(newTemp - lastTemp) >= 1.0) || 
-           (abs(newHumidity - lastHumidity) >= 2.0);
+bool FirebaseDatos::shouldUpdate(float newTemp, float newHumidity, float newCO2) {
+    bool tempChanged = (abs(newTemp - lastTemp) >= 1.0);
+    bool humChanged = (abs(newHumidity - lastHumidity) >= 2.0);
+    bool co2Changed = (newCO2 >= 0) && (abs(newCO2 - lastCO2) >= 50.0); // Umbral de 50ppm para CO2
+    
+    return tempChanged || humChanged || co2Changed;
 }
 
-bool FirebaseDatos::sendData(float temperature, float humidity) {
-    if(!shouldUpdate(temperature, humidity)) {
+bool FirebaseDatos::sendData(float temperature, float humidity, float co2) {
+    if(!shouldUpdate(temperature, humidity, co2)) {
         return false;
     }
 
@@ -92,12 +100,14 @@ bool FirebaseDatos::sendData(float temperature, float humidity) {
     json.set("hora", currentTime);
     json.set("humedad", humidity);
     json.set("temperatura", temperature);
+    if(co2 >= 0) json.set("co2", co2); // Solo añadir CO2 si es válido
 
     String path = "lecturas/" + currentDate + "/" + currentTime;
     
     if(Firebase.RTDB.setJSON(&fbdo, path, &json)) {
         lastTemp = temperature;
         lastHumidity = humidity;
+        if(co2 >= 0) lastCO2 = co2; // Actualizar solo si es válido
         
         // Actualizar última lectura
         Firebase.RTDB.setJSON(&fbdo, "/ultima_lectura", &json);
