@@ -2,7 +2,8 @@
 #include "FirebaseDATOS.h"
 #include "sensorDHT11.h"
 #include "MQ2Sensor.h"
-
+#include "LCD_I2C.h"
+#include <Wire.h>
 
 // Configuraciones
 #define WIFI_SSID "WAB 2.4"
@@ -37,17 +38,30 @@ ModoSistema modoSistema = MODO_MENU;  // Se inicia en modo menú
 float co2;
 void LeerCO();
 
+// Configuración LCD
+#define LCD_ADDRESS 0x27   // Dirección I2C común (usa 0x3F si no funciona)
+#define LCD_COLUMNS 20     // 2004A = 20 columnas
+#define LCD_ROWS 4         // 2004A = 4 filas
+
+LCD_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
+
+
+
 void setup() {
-   // Fuerza modo correcto para GPIO14
+    pinMode(RELAY1, OUTPUT);
+    pinMode(RELAY2, OUTPUT);
+    digitalWrite(RELAY1, HIGH);  // Apaga relé (depende de tu lógica)
+    digitalWrite(RELAY2, HIGH);  // HIGH = Apagado en configuración normal
+    delay(500);  // Espera a que se estabilice la alimentación
+    Serial.begin(115200);
+    lcd.begin();
+    // Fuerza modo correcto para GPIO14
     pinMode(DHTPIN, INPUT_PULLUP);
     delay(100);
-    
     // Inicializa DHT
     dhtSensor.iniciar();
     delay(2000); // Espera crítica para DHT11
-
-    Serial.begin(115200);
-      // Inicializar el sensor MQ-2
+    // Inicializar el sensor MQ-2
     gasSensor.begin();
     ////sensor dht11/////////
     dhtSensor.iniciar();
@@ -55,20 +69,12 @@ void setup() {
     firebase.begin(WIFI_SSID, WIFI_PASSWORD, 
                   FIREBASE_API_KEY, FIREBASE_URL,
                   FIREBASE_EMAIL, FIREBASE_PASSWORD);
-
-
 }
 
 void loop() {
-    // Testeo del pin D5/GPIO14
-    pinMode(DHTPIN, INPUT_PULLUP);
-    Serial.print("Estado pin D5: ");
-    Serial.println(digitalRead(DHTPIN)); // Debe ser 1 (HIGH)
-    
-    dhtSensor.leerValores();
+   dhtSensor.leerValores();
     float humedad = dhtSensor.getHumedad();
     float temperatura = dhtSensor.getTemperatura();
-    
     if (isnan(humedad) || isnan(temperatura)) {
         Serial.println("¡Fallo lectura DHT11!");
         delay(2000);
@@ -76,8 +82,6 @@ void loop() {
   // Mostrar y enviar datos
     Serial.printf("Temperatura: %.1f°C, Humedad: %.1f%%, CO2: %.1fppm\n", 
       temperatura, humedad, co2 >= 0 ? co2 : 0);
-          
-      
 
     if(firebase.sendData(temperatura, humedad, co2)) {
         Serial.println("Datos enviados a Firebase");
@@ -85,6 +89,14 @@ void loop() {
         Serial.println("Sin cambios significativos");
     }
    LeerCO();
+    lcd.clear();         // Limpia pantalla
+    lcd.begin();  // Sin argumentos
+    lcd.backlight(true);
+    lcd.print("¡Funciona!"); 
+    lcd.clear();
+    lcd.print("Temperatura: " + String(temperatura, 1), 0, 0);
+    lcd.print("Humedad: " + String(humedad, 1), 0, 1);
+    lcd.print("CO2: " + String(co2, 1), 0, 2);
   delay(5000);
   return;
 }
