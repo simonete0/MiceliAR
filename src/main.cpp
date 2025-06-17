@@ -1,8 +1,7 @@
 #include <Arduino.h>
 #include "FirebaseDATOS.h"
 #include "sensorDHT11.h"
-#include "MQ135Sensor.h"
-
+#include "MQ2Sensor.h"
 
 
 // Configuraciones
@@ -12,21 +11,22 @@
 #define FIREBASE_API_KEY "AIzaSyBoaIXH4BWwvUB1VAkPqkI3DZ9SgK0b728"
 #define FIREBASE_EMAIL "admin@admin.com"
 #define FIREBASE_PASSWORD "admin1234"
-#define DHTPIN 5      // GPIO5 (D5) para sensor DHT11
-#define I2C_SDA 2     // GPIO2 (D2) para I2C SDA
-#define I2C_SCL 1     // GPIO1 (D1) para I2C SCL
-#define SWITCH_PIN 0  // D0 para llave palanca (interrupt)
-#define ENCODER_CLK 6 // D6 encoder clock
-#define ENCODER_DT 7  // D7 encoder data
-#define ENCODER_SW 9  // D9 encoder switch
-#define LED_ALARM 3   // D3 led alarma
-#define MQ135_PIN A0  // ADC para sensor MQ135
-#define RELAY1 4      // D4 rele 1 (Ventilador)
-#define RELAY2 8      // D8 rele 2 (Calefactor)
+
+#define MQ2_PIN A0    // ADC para sensor MQ135
+#define RELAY2 16        // D0 rele 2 (Calefactor)
+#define I2C_SDA 4       // GPIO2 (D2) para I2C SDA
+#define I2C_SCL 5       // GPIO1 (D1) para I2C SCL
+#define SW_encoder 2    // D4 para switch encoder
+#define DHTPIN 14        // GPIO5 (D5) para sensor DHT11
+#define DHTTYPE DHT11
+#define CLOCK_encoder 12 // D6 encoder clock
+#define DT_encoder 13    // D7 encoder data
+#define RELAY1 15        // D8 rele 1 (Ventilador)
+
 
 FirebaseDatos firebase;
 sensorDHT dhtSensor(DHTPIN);
-MQ135Sensor co2Sensor(A0, 60000);// Crear instancia del sensor en el pin A0 con 60 segundos de calentamiento
+MQ2Sensor gasSensor(MQ2_PIN);
 // Enumeración de modos de sistema
 enum ModoSistema {
   MODO_FUNCIONAMIENTO,
@@ -34,86 +34,76 @@ enum ModoSistema {
 };
 // Variables globales
 ModoSistema modoSistema = MODO_MENU;  // Se inicia en modo menú
-
+float co2;
+void LeerCO();
 
 void setup() {
+   // Fuerza modo correcto para GPIO14
+    pinMode(DHTPIN, INPUT_PULLUP);
+    delay(100);
+    
+    // Inicializa DHT
+    dhtSensor.iniciar();
+    delay(2000); // Espera crítica para DHT11
+
     Serial.begin(115200);
+      // Inicializar el sensor MQ-2
+    gasSensor.begin();
     ////sensor dht11/////////
     dhtSensor.iniciar();
     ///base de datos/////////
     firebase.begin(WIFI_SSID, WIFI_PASSWORD, 
                   FIREBASE_API_KEY, FIREBASE_URL,
                   FIREBASE_EMAIL, FIREBASE_PASSWORD);
-    //sensor mq135///////////
-    co2Sensor.begin();
-    Serial.println("Calentando sensor MQ135...");  // Mostrar mensaje de calentamiento
-    //
+
 
 }
 
 void loop() {
-    Leer_Sensores;
-   
+    // Testeo del pin D5/GPIO14
+    pinMode(DHTPIN, INPUT_PULLUP);
+    Serial.print("Estado pin D5: ");
+    Serial.println(digitalRead(DHTPIN)); // Debe ser 1 (HIGH)
     
-}
-
-
-// Función para leer el estado de la llave
-void leerModoSistema() {
-  if (digitalRead(SWITCH_PIN) == HIGH) {
-    modoSistema = MODO_FUNCIONAMIENTO;
-  } else {
-    modoSistema = MODO_MENU;
-  }
-}
-// Lógica del modo funcionamiento
-void loopFuncionamiento() {
-  // Aquí irá la lógica para controlar sensores, relés y alarmas según setpoints
-  Serial.println("Modo: FUNCIONAMIENTO");
-  // ejemplo: digitalWrite(RELAY1, HIGH); si temp < setpoint
-}
-// Lógica del modo menú
-void loopMenu() {
-  // Aquí irá la navegación del menú usando el encoder y su botón
-  Serial.println("Modo: MENU");
-  // ejemplo: mostrar "Setpoint Humedad" y permitir ajustar
-}
-
-
-void Leer_Sensores() {
-    delay(4000);
-    
-    // Leer DHT11
     dhtSensor.leerValores();
-    float temperatura = dhtSensor.getTemperatura();
     float humedad = dhtSensor.getHumedad();
+    float temperatura = dhtSensor.getTemperatura();
     
     if (isnan(humedad) || isnan(temperatura)) {
-        Serial.println("Error en lectura DHT11");
-        return;
+        Serial.println("¡Fallo lectura DHT11!");
+        delay(2000);
     }
-
-    // Leer MQ135
-    static unsigned long lastCO2Read = 0;
-    float co2 = -1; // Valor por defecto (no disponible)
-    
-    if (co2Sensor.isReady() && millis() - lastCO2Read >= 30000) {
-        lastCO2Read = millis();
-        co2 = co2Sensor.readCO2();
-        if (co2 >= 0) {
-            Serial.print("CO2: ");
-            Serial.print(co2);
-            Serial.println(" ppm");
-        }
-    }
-
-    // Mostrar y enviar datos
+  // Mostrar y enviar datos
     Serial.printf("Temperatura: %.1f°C, Humedad: %.1f%%, CO2: %.1fppm\n", 
-                 temperatura, humedad, co2 >= 0 ? co2 : 0);
-                 
+      temperatura, humedad, co2 >= 0 ? co2 : 0);
+          
+      
+
     if(firebase.sendData(temperatura, humedad, co2)) {
         Serial.println("Datos enviados a Firebase");
     } else {
         Serial.println("Sin cambios significativos");
     }
+   LeerCO();
+  delay(5000);
+  return;
+}
+
+void LeerCO() {
+    if (!gasSensor.isReady()) {
+        Serial.println("Calentando sensor MQ2...");
+        delay(10000);
+        return;
+    }
+
+    float co = gasSensor.leerCO();
+    co2 = gasSensor.leerCO2();
+
+    Serial.print("CO estimado: ");
+    Serial.print(co);
+    Serial.println(" ppm");
+
+    Serial.print("CO2 simulado: ");
+    Serial.print(co2);
+    Serial.println(" ppm");
 }

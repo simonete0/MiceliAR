@@ -97,7 +97,7 @@ bool FirebaseDatos::sendData(float temperature, float humidity, float co2) {
     String currentTime = getCurrentTime();
 
     FirebaseJson json;
-    json.set("hora", currentTime);
+    //json.set("hora", currentTime);
     json.set("humedad", humidity);
     json.set("temperatura", temperature);
     if(co2 >= 0) json.set("co2", co2); // Solo añadir CO2 si es válido
@@ -111,6 +111,7 @@ bool FirebaseDatos::sendData(float temperature, float humidity, float co2) {
         
         // Actualizar última lectura
         Firebase.RTDB.setJSON(&fbdo, "/ultima_lectura", &json);
+        json.set("hora", currentTime);
         return true;
     }
     return false;
