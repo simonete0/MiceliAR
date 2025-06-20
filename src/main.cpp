@@ -198,6 +198,11 @@ bool ventilacionProgramadaActiva = false; // Bandera para indicar si la ventilac
 // Nueva bandera para CO2 bajo
 bool banderaBajoCO2 = false;
 
+// Variable para el estado guardado en EEPROM
+// 0: Modo Menu, 1: Modo Funcionamiento
+uint8_t lastAppStateFlag = 0;
+const int EEPROM_APP_STATE_ADDR = EEPROM_SIZE - sizeof(uint8_t); // Último byte de la EEPROM
+
 // ---------------- PROTOTIPOS DE FUNCIONES ----------------
 void IRAM_ATTR leerEncoderISR();
 void IRAM_ATTR leerSwitchISR();
@@ -227,6 +232,8 @@ void leerSensores();
 // Funciones para EEPROM
 void guardarSetpointsEEPROM();
 void cargarSetpointsEEPROM();
+void guardarEstadoAppEEPROM();
+void cargarEstadoAppEEPROM();
 
 // Funciones auxiliares para la prioridad de ventilación
 bool estaEnExcesoTemperatura();
@@ -240,11 +247,12 @@ void setup() {
   Serial.begin(115200);
 
   // ETIQUETA: Configuracion de pines de 'prueba encoder'
+  // *** Asegurar que los relés estén APAGADOS desde el inicio ***
   pinMode(RELAY1, OUTPUT);
   pinMode(RELAY2, OUTPUT);
   digitalWrite(RELAY1, HIGH);  // Apaga relé 1 (Ventilador) - HIGH
   digitalWrite(RELAY2, HIGH);  // Apaga relé 2 (Calefactor) - HIGH
-  delay(500);  // Espera a que se estabilice la alimentación
+  delay(100);  // Pequeña espera para estabilización
 
   pinMode(CLOCK_ENCODER, INPUT_PULLUP);
   pinMode(DT_ENCODER, INPUT_PULLUP);
@@ -258,7 +266,14 @@ void setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   lcd.begin();
   lcd.backlight(true); // Asegurar que la luz de fondo esté encendida
+  // *** Mensaje inicial en el LCD para indicar que está iniciando ***
+  lcd.clear();
+  lcd.print("Iniciando sistema...", 0, 0);
+  lcd.print("Cargando datos...", 0, 1);
+  delay(2000); // Dar tiempo para leer el mensaje
+
   cargarSetpointsEEPROM();
+  cargarEstadoAppEEPROM(); // Cargar el último estado de la aplicación
 
   // ETIQUETA: Inicializacion de sensores y Firebase de 'prueba encoder'
   pinMode(DHTPIN, INPUT_PULLUP); // Fuerza modo correcto para GPIO14
@@ -270,8 +285,18 @@ void setup() {
                 FIREBASE_API_KEY, FIREBASE_URL,
                 FIREBASE_EMAIL, FIREBASE_PASSWORD);
 
+  // Si el último estado guardado fue "Modo Funcionamiento", inicia en ese estado
+  if (lastAppStateFlag == 1) {
+      estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
+  } else {
+      estadoActualApp = ESTADO_MENU_PRINCIPAL;
+  }
+
   necesitaRefrescarLCD = true;
-  indiceMenuPrincipal = 0;
+  // No resetear indiceMenuPrincipal si se carga de EEPROM y se va a Modo Funcionamiento
+  if (estadoActualApp == ESTADO_MENU_PRINCIPAL) {
+      indiceMenuPrincipal = 0;
+  }
 
   // Inicializar el tiempo de la última ventilación programada
   ultimoTiempoVentilacionProgramada = millis();
@@ -384,6 +409,7 @@ void loop() {
         if (switchPulsadoActual) {
             if (indiceConfirmacion == 0) { // SI
                 proximoEstado = ESTADO_MODO_FUNCIONAMIENTO;
+                guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
             } else { // NO
                 proximoEstado = ESTADO_MENU_PRINCIPAL;
             }
@@ -413,6 +439,7 @@ void loop() {
         if (switchPulsadoActual) {
             if (indiceConfirmacion == 0) { // SI
                 proximoEstado = ESTADO_MENU_PRINCIPAL;
+                guardarEstadoAppEEPROM(); // Guardar el estado de Menu Principal en EEPROM
             } else { // NO
                 proximoEstado = ESTADO_MODO_FUNCIONAMIENTO; // Vuelve al modo de funcionamiento
             }
@@ -496,6 +523,13 @@ void loop() {
   // ETIQUETA: Lógica de transición de estado y refresco de LCD
   if (proximoEstado != estadoActualApp || necesitaRefrescarLCD) {
       if (proximoEstado != estadoActualApp) {
+          // *** Apagar relés al salir del modo funcionamiento y entrar a un menú ***
+          if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO && proximoEstado != ESTADO_MODO_FUNCIONAMIENTO) {
+              digitalWrite(RELAY1, HIGH); // Apagar ventilador
+              digitalWrite(RELAY2, HIGH); // Apagar calefactor
+              Serial.println("Relés APAGADOS al salir de Modo Funcionamiento.");
+          }
+
           // Lógica para reiniciar índices al cambiar de estado principal
           if (proximoEstado == ESTADO_MENU_PRINCIPAL) {
               indiceMenuPrincipal = 0;
@@ -1076,6 +1110,28 @@ void cargarSetpointsEEPROM() {
   Serial.printf("Alarma Hum Min: %.1f, Max: %.1f\n", alarmaHumMin, alarmaHumMax);
   Serial.printf("Alarma CO2 Min: %d, Max: %d\n", alarmaCO2Min, alarmaCO2Max);
 }
+
+// *** Nueva función para guardar el estado de la aplicación en EEPROM ***
+void guardarEstadoAppEEPROM() {
+    EEPROM.begin(EEPROM_SIZE);
+    EEPROM.put(EEPROM_APP_STATE_ADDR, (uint8_t)(estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO ? 1 : 0));
+    EEPROM.commit();
+    EEPROM.end();
+    Serial.printf("Estado de app guardado en EEPROM: %d\n", lastAppStateFlag);
+}
+
+// *** Nueva función para cargar el estado de la aplicación desde EEPROM ***
+void cargarEstadoAppEEPROM() {
+    EEPROM.begin(EEPROM_SIZE);
+    EEPROM.get(EEPROM_APP_STATE_ADDR, lastAppStateFlag);
+    EEPROM.end();
+    // Validar si el valor es consistente (0 o 1)
+    if (lastAppStateFlag != 0 && lastAppStateFlag != 1) {
+        lastAppStateFlag = 0; // Por defecto, si es inconsistente, ir al menú
+    }
+    Serial.printf("Estado de app cargado de EEPROM: %d\n", lastAppStateFlag);
+}
+
 
 void manejarEditarTemperatura(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print("Temperatura         ", 0, 0);
