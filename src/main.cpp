@@ -110,6 +110,32 @@ const float ALARMA_HUM_PASO = 1.0;
 const int ALARMA_CO2_MIN_RANGO = 300; // Valores a revisar con el usuario
 const int ALARMA_CO2_MAX_RANGO = 8000; // Valores a revisar con el usuario
 const int ALARMA_CO2_PASO = 50; // Paso más grande para CO2
+// --- NUEVAS VARIABLES GLOBALES PARA ALARMAS CRITICAS ---
+unsigned long tiempoInicioAlarmaTempMin;
+unsigned long tiempoInicioAlarmaTempMax;
+unsigned long tiempoInicioAlarmaHumMin;
+unsigned long tiempoInicioAlarmaHumMax;
+unsigned long tiempoInicioAlarmaCO2Min;
+unsigned long tiempoInicioAlarmaCO2Max;
+
+bool notificacionCriticaTempMinActiva = false;
+bool notificacionCriticaTempMaxActiva = false;
+bool notificacionCriticaHumMinActiva = false;
+bool notificacionCriticaHumMaxActiva = false;
+bool notificacionCriticaCO2MinActiva = false;
+bool notificacionCriticaCO2MaxActiva = false;
+bool alarmaDescartada = false;
+bool estaEnExcesoTemperatura();
+bool estaEnDefectoTemperatura();
+bool estaEnExcesoHumedad();
+bool estaEnDefectoHumedad();
+bool estaEnExcesoCO2();
+bool estaEnDefectoCO2();
+bool hayAlarmasCriticas() {
+  return estaEnExcesoTemperatura() || estaEnDefectoTemperatura() ||
+         estaEnExcesoHumedad() || estaEnDefectoHumedad() ||
+         estaEnExcesoCO2() || estaEnDefectoCO2();
+};
 
 
 // Opciones del menú principal
@@ -131,7 +157,7 @@ enum EstadoApp {
   ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO,
   ESTADO_MODO_FUNCIONAMIENTO,
   ESTADO_CONFIRMACION_VOLVER_MENU, // Nuevo estado de confirmación
-  ESTADO_EDITAR_TEMP,
+  ESTADO_EDITAR_TEMP = 10, // Explicitly assign 10 here
   ESTADO_EDITAR_HUM,
   ESTADO_EDITAR_CO2,
   ESTADO_EDITAR_ALARMA_TEMP_MIN,
@@ -139,10 +165,11 @@ enum EstadoApp {
   ESTADO_EDITAR_ALARMA_HUM_MIN,
   ESTADO_EDITAR_ALARMA_HUM_MAX,
   ESTADO_EDITAR_ALARMA_CO2_MIN,
-  ESTADO_EDITAR_ALARMA_CO2_MAX
+  ESTADO_EDITAR_ALARMA_CO2_MAX,
+  ESTADO_ALARMA_CRITICA_AVISO // Este se asignará automáticamente al siguiente valor único (19 en este caso).
 };
 EstadoApp estadoActualApp = ESTADO_MENU_PRINCIPAL;
-
+EstadoApp lastValidState = ESTADO_MENU_PRINCIPAL; // Inicializa con un estado por defect
 bool necesitaRefrescarLCD = true;
 
 // ETIQUETA: Variables para 'Modo Funcionamiento'
@@ -197,6 +224,8 @@ bool ventilacionProgramadaActiva = false; // Bandera para indicar si la ventilac
 
 unsigned long ultimaActualizacionSensores = 0;
 const unsigned long INTERVALO_LECTURA_SENSORES = 1000; // Leer sensores cada 1 segundo
+unsigned long lastSensorReadTime = 0; // Declaración de lastSensorReadTime
+
 // Variable para el estado guardado en EEPROM
 // 0: Modo Menu, 1: Modo Funcionamiento
 uint8_t lastAppStateFlag = 0;
@@ -261,6 +290,9 @@ bool estaEnExcesoHumedad();
 bool estaEnExcesoCO2();
 bool estaEnDefectoCO2();
 
+void manejarVentilador(int);
+void evaluarAlarmasCriticas();
+void manejarAlarmaCriticaAviso(int deltaEncoder, bool pulsadoSwitch); // Prototipo añadido
 
 // ---------------- SETUP ----------------
 void setup() {
@@ -317,328 +349,471 @@ void setup() {
   if (estadoActualApp == ESTADO_MENU_PRINCIPAL) {
       indiceMenuPrincipal = 0;
   }
-
   // Inicializar el tiempo de la última ventilación programada
   ultimoTiempoVentilacionProgramada = millis();
 }
 
-// ---------------- LOOP PRINCIPAL ----------------
-void loop() {
-  noInterrupts();
-  int deltaEncoderActual = valorEncoder;
-  bool switchPulsadoActual = swFuePresionadoISR;
-  valorEncoder = 0;
-  swFuePresionadoISR = false; // Se limpia la bandera del switch al inicio del loop
-  interrupts();
-
-  EstadoApp proximoEstado = estadoActualApp;
-
-  switch (estadoActualApp) {
-    case ESTADO_MENU_PRINCIPAL:
-      if (deltaEncoderActual != 0) {
-        indiceMenuPrincipal += deltaEncoderActual;
-        if (indiceMenuPrincipal < 0) indiceMenuPrincipal = TOTAL_OPCIONES_MENU_PRINCIPAL - 1;
-        if (indiceMenuPrincipal >= TOTAL_OPCIONES_MENU_PRINCIPAL) indiceMenuPrincipal = 0;
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        switch (indiceMenuPrincipal) {
-          case 0: proximoEstado = ESTADO_EDITAR_SETPOINTS; break;
-          case 1: proximoEstado = ESTADO_ALARMAS_SUBMENU; break;
-          case 2:
-              proximoEstado = ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO;
-              indiceConfirmacion = 0; // Reiniciar índice a SI
-              break;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_EDITAR_SETPOINTS:
-      if (deltaEncoderActual != 0) {
-        indiceSubMenuSetpoints += deltaEncoderActual;
-        if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
-        if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        switch (indiceSubMenuSetpoints) {
-          case 0: proximoEstado = ESTADO_EDITAR_TEMP; break;
-          case 1: proximoEstado = ESTADO_EDITAR_HUM; break;
-          case 2: proximoEstado = ESTADO_EDITAR_CO2; break;
-          case 3:
-              guardarSetpointsEEPROM();
-              proximoEstado = ESTADO_MENU_PRINCIPAL;
-              break;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_ALARMAS_SUBMENU:
-      if (deltaEncoderActual != 0) {
-        indiceSubMenuAlarmas += deltaEncoderActual;
-        if (indiceSubMenuAlarmas < 0) indiceSubMenuAlarmas = TOTAL_OPCIONES_SUBMENU_ALARMAS - 1;
-        if (indiceSubMenuAlarmas >= TOTAL_OPCIONES_SUBMENU_ALARMAS) indiceSubMenuAlarmas = 0;
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        switch (indiceSubMenuAlarmas) {
-          case 0: proximoEstado = ESTADO_MOSTRAR_ALARMAS; break;
-          case 1:
-              proximoEstado = ESTADO_EDITAR_ALARMAS;
-              indiceEditarAlarmas = 0;
-              break;
-          case 2: proximoEstado = ESTADO_MENU_PRINCIPAL; break;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_EDITAR_ALARMAS:
-      if (deltaEncoderActual != 0) {
-        indiceEditarAlarmas += deltaEncoderActual;
-        if (indiceEditarAlarmas < 0) indiceEditarAlarmas = TOTAL_OPCIONES_EDITAR_ALARMAS - 1;
-        if (indiceEditarAlarmas >= TOTAL_OPCIONES_EDITAR_ALARMAS) indiceEditarAlarmas = 0;
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        switch (indiceEditarAlarmas) {
-          case 0: proximoEstado = ESTADO_EDITAR_ALARMA_TEMP_MIN; break;
-          case 1: proximoEstado = ESTADO_EDITAR_ALARMA_TEMP_MAX; break;
-          case 2: proximoEstado = ESTADO_EDITAR_ALARMA_HUM_MIN; break;
-          case 3: proximoEstado = ESTADO_EDITAR_ALARMA_HUM_MAX; break;
-          case 4: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MIN; break;
-          case 5: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MAX; break;
-          case 6:
-              guardarSetpointsEEPROM();
-              proximoEstado = ESTADO_ALARMAS_SUBMENU;
-              break;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO:
-        if (deltaEncoderActual != 0) {
-            indiceConfirmacion += deltaEncoderActual;
-            if (indiceConfirmacion < 0) indiceConfirmacion = TOTAL_OPCIONES_CONFIRMACION - 1;
-            if (indiceConfirmacion >= TOTAL_OPCIONES_CONFIRMACION) indiceConfirmacion = 0;
-            necesitaRefrescarLCD = true;
-        }
-        if (switchPulsadoActual) {
-            if (indiceConfirmacion == 0) { // SI
-                proximoEstado = ESTADO_MODO_FUNCIONAMIENTO;
-                guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
-            } else { // NO
-                proximoEstado = ESTADO_MENU_PRINCIPAL;
-            }
-            necesitaRefrescarLCD = true;
-        }
-        break;
-
-    case ESTADO_MODO_FUNCIONAMIENTO:
-        // En este modo, el encoder no hace nada, solo el switch
-        if (switchPulsadoActual) {
-            proximoEstado = ESTADO_CONFIRMACION_VOLVER_MENU; // Pasa a preguntar si desea volver
-            indiceConfirmacion = 0; // Reiniciar índice a SI
-            necesitaRefrescarLCD = true; // Forzar un refresco para la nueva pantalla
-        }
-        // Las actualizaciones de sensores y Firebase se manejan dentro de manejarModoFuncionamiento
-        // para un control más fino. No necesitamos 'necesitaRefrescarLCD = true;' aquí
-        // a menos que sea para una transición de estado, lo cual ya se maneja arriba.
-        break;
-
-    case ESTADO_CONFIRMACION_VOLVER_MENU: // Nuevo caso para confirmar el regreso al menú
-        if (deltaEncoderActual != 0) {
-            indiceConfirmacion += deltaEncoderActual;
-            if (indiceConfirmacion < 0) indiceConfirmacion = TOTAL_OPCIONES_CONFIRMACION - 1;
-            if (indiceConfirmacion >= TOTAL_OPCIONES_CONFIRMACION) indiceConfirmacion = 0;
-            necesitaRefrescarLCD = true;
-        }
-        if (switchPulsadoActual) {
-            if (indiceConfirmacion == 0) { // SI
-                proximoEstado = ESTADO_MENU_PRINCIPAL;
-                guardarEstadoAppEEPROM(); // Guardar el estado de Menu Principal en EEPROM
-            } else { // NO
-                proximoEstado = ESTADO_MODO_FUNCIONAMIENTO; // Vuelve al modo de funcionamiento
-            }
-            necesitaRefrescarLCD = true;
-        }
-        break;
-
-    case ESTADO_EDITAR_TEMP:
-    case ESTADO_EDITAR_HUM:
-    case ESTADO_EDITAR_CO2:
-      if (deltaEncoderActual != 0) {
-        if (estadoActualApp == ESTADO_EDITAR_TEMP) {
-            setpointTemperatura += (float)deltaEncoderActual * TEMP_PASO;
-            if (setpointTemperatura < TEMP_MIN) setpointTemperatura = TEMP_MIN;
-            if (setpointTemperatura > TEMP_MAX) setpointTemperatura = TEMP_MAX;
-        } else if (estadoActualApp == ESTADO_EDITAR_HUM) {
-            setpointHumedad += (float)deltaEncoderActual * HUM_PASO;
-            if (setpointHumedad < HUM_MIN) setpointHumedad = HUM_MIN;
-            if (setpointHumedad > HUM_MAX) setpointHumedad = HUM_MAX;
-        } else if (estadoActualApp == ESTADO_EDITAR_CO2) {
-            setpointCO2 += deltaEncoderActual * CO2_PASO;
-            if (setpointCO2 < CO2_MIN) setpointCO2 = CO2_MIN;
-            if (setpointCO2 > CO2_MAX) setpointCO2 = CO2_MAX;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        proximoEstado = ESTADO_EDITAR_SETPOINTS;
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_EDITAR_ALARMA_TEMP_MIN:
-    case ESTADO_EDITAR_ALARMA_TEMP_MAX:
-    case ESTADO_EDITAR_ALARMA_HUM_MIN:
-    case ESTADO_EDITAR_ALARMA_HUM_MAX:
-    case ESTADO_EDITAR_ALARMA_CO2_MIN:
-    case ESTADO_EDITAR_ALARMA_CO2_MAX:
-      if (deltaEncoderActual != 0) {
-        if (estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MIN) {
-            alarmaTempMin += (float)deltaEncoderActual * ALARMA_TEMP_PASO;
-            if (alarmaTempMin < ALARMA_TEMP_MIN_RANGO) alarmaTempMin = ALARMA_TEMP_MIN_RANGO;
-            if (alarmaTempMin > ALARMA_TEMP_MAX_RANGO) alarmaTempMin = ALARMA_TEMP_MAX_RANGO;
-        } else if (estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MAX) {
-            alarmaTempMax += (float)deltaEncoderActual * ALARMA_TEMP_PASO;
-            if (alarmaTempMax < ALARMA_TEMP_MIN_RANGO) alarmaTempMax = ALARMA_TEMP_MIN_RANGO;
-            if (alarmaTempMax > ALARMA_TEMP_MAX_RANGO) alarmaTempMax = ALARMA_TEMP_MAX_RANGO;
-        } else if (estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MIN) {
-            alarmaHumMin += (float)deltaEncoderActual * ALARMA_HUM_PASO;
-            if (alarmaHumMin < ALARMA_HUM_MIN_RANGO) alarmaHumMin = ALARMA_HUM_MIN_RANGO;
-            if (alarmaHumMin > ALARMA_HUM_MAX_RANGO) alarmaHumMin = ALARMA_HUM_MAX_RANGO;
-        } else if (estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MAX) {
-            alarmaHumMax += (float)deltaEncoderActual * ALARMA_HUM_PASO;
-            if (alarmaHumMax < ALARMA_HUM_MIN_RANGO) alarmaHumMax = ALARMA_HUM_MIN_RANGO;
-            if (alarmaHumMax > ALARMA_HUM_MAX_RANGO) alarmaHumMax = ALARMA_HUM_MAX_RANGO;
-        } else if (estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MIN) {
-            alarmaCO2Min += deltaEncoderActual * ALARMA_CO2_PASO;
-            if (alarmaCO2Min < ALARMA_CO2_MIN_RANGO) alarmaCO2Min = ALARMA_CO2_MIN_RANGO;
-            if (alarmaCO2Min > ALARMA_CO2_MAX_RANGO) alarmaCO2Min = ALARMA_CO2_MAX_RANGO;
-        } else if (estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MAX) {
-            alarmaCO2Max += deltaEncoderActual * ALARMA_CO2_PASO;
-            if (alarmaCO2Max < ALARMA_CO2_MIN_RANGO) alarmaCO2Max = ALARMA_CO2_MIN_RANGO;
-            if (alarmaCO2Max > ALARMA_CO2_MAX_RANGO) alarmaCO2Max = ALARMA_CO2_MAX_RANGO;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        proximoEstado = ESTADO_EDITAR_ALARMAS;
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
-    case ESTADO_MOSTRAR_ALARMAS:
-      if (switchPulsadoActual) {
-        proximoEstado = ESTADO_ALARMAS_SUBMENU;
-        necesitaRefrescarLCD = true;
-      }
-      break;
+// ---------------- FUNCIONES DE MANEJO DE ESTADOS Y MENÚ ----------------
+void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    desplazamientoScroll = 0; // Resetear desplazamiento al entrar al menú principal
+    necesitaRefrescarLCD = false;
   }
 
-  // ETIQUETA: Lógica de transición de estado y refresco de LCD
-  if (proximoEstado != estadoActualApp || necesitaRefrescarLCD) {
-      if (proximoEstado != estadoActualApp) {
-          // *** Apagar relés al salir del modo funcionamiento y entrar a un menú ***
-          if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO && proximoEstado != ESTADO_MODO_FUNCIONAMIENTO) {
-              digitalWrite(RELAY1, HIGH); // Apagar ventilador
-              digitalWrite(RELAY2, HIGH); // Apagar calefactor
-              Serial.println("Relés APAGADOS al salir de Modo Funcionamiento.");
-          }
-
-          // Lógica para reiniciar índices al cambiar de estado principal
-          if (proximoEstado == ESTADO_MENU_PRINCIPAL) {
-              indiceMenuPrincipal = 0;
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_EDITAR_SETPOINTS) {
-              indiceSubMenuSetpoints = 0;
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_ALARMAS_SUBMENU) {
-              indiceSubMenuAlarmas = 0;
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_EDITAR_ALARMAS) {
-              indiceEditarAlarmas = 0;
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO || proximoEstado == ESTADO_CONFIRMACION_VOLVER_MENU) {
-              indiceConfirmacion = 0; // Siempre iniciar en "SI" para confirmaciones
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_MODO_FUNCIONAMIENTO) {
-              initialMessageDisplayed = false; // ETIQUETA: Reiniciar bandera de mensaje inicial
-              lastDisplayedTemp = -999.0; // Forzar la primera visualización de datos de sensores
-              lastDisplayedHum = -999.0;
-              lastDisplayedCO2 = -999.0;
-              // Resetear estado del ventilador al entrar en modo funcionamiento
-              estadoVentiladorActual = VENTILADOR_INACTIVO;
-              digitalWrite(RELAY1, HIGH); // Asegurarse de que el ventilador esté apagado
-              digitalWrite(RELAY2, HIGH); // Asegurarse de que el calefactor esté apagado
-          }
-
-          // Lógica para mantener índices al volver de una edición a un submenú
-          if (estadoActualApp == ESTADO_EDITAR_TEMP && proximoEstado == ESTADO_EDITAR_SETPOINTS) indiceSubMenuSetpoints = 0;
-          if (estadoActualApp == ESTADO_EDITAR_HUM && proximoEstado == ESTADO_EDITAR_SETPOINTS) indiceSubMenuSetpoints = 1;
-          if (estadoActualApp == ESTADO_EDITAR_CO2 && proximoEstado == ESTADO_EDITAR_SETPOINTS) indiceSubMenuSetpoints = 2;
-
-          if (estadoActualApp == ESTADO_MOSTRAR_ALARMAS && proximoEstado == ESTADO_ALARMAS_SUBMENU) indiceSubMenuAlarmas = 0;
-
-          if ( (estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MAX ||
-                estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MAX ||
-                estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MAX) &&
-                proximoEstado == ESTADO_EDITAR_ALARMAS) {
-                    // Mantiene el índice en indiceEditarAlarmas donde estaba
-                }
-
-          // Ajustes de índice al volver a MENU_PRINCIPAL desde confirmación o modo funcionamiento
-          if ((estadoActualApp == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO && proximoEstado == ESTADO_MENU_PRINCIPAL) ||
-              (estadoActualApp == ESTADO_CONFIRMACION_VOLVER_MENU && proximoEstado == ESTADO_MENU_PRINCIPAL)) {
-              indiceMenuPrincipal = 2; // Vuelve a la opción "Modo Funcionamiento"
-          }
-      }
-
-      estadoActualApp = proximoEstado;
-      lcd.clear(); // Limpiar la pantalla antes de dibujar el nuevo estado
-
-      switch (estadoActualApp) {
-        case ESTADO_MENU_PRINCIPAL: manejarMenuPrincipal(0, false); break;
-        case ESTADO_EDITAR_SETPOINTS: manejarEditarSetpoints(0, false); break;
-        case ESTADO_ALARMAS_SUBMENU: manejarSubMenuAlarmas(0, false); break;
-        case ESTADO_EDITAR_TEMP: manejarEditarTemperatura(0, false); break;
-        case ESTADO_EDITAR_HUM: manejarEditarHumedad(0, false); break;
-        case ESTADO_EDITAR_CO2: manejarEditarCO2(0, false); break;
-        case ESTADO_MOSTRAR_ALARMAS: manejarMostrarAlarmas(0, false); break; 
-        case ESTADO_EDITAR_ALARMAS: manejarEditarAlarmas(0, false); break;
-        case ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO: manejarConfirmacionModoFuncionamiento(0, false); break;
-        case ESTADO_MODO_FUNCIONAMIENTO: manejarModoFuncionamiento(0, false); break;
-        case ESTADO_CONFIRMACION_VOLVER_MENU: manejarConfirmacionVolverMenu(0, false); break;
-        case ESTADO_EDITAR_ALARMA_TEMP_MIN: manejarEditarAlarmaTempMin(0, false); break;
-        case ESTADO_EDITAR_ALARMA_TEMP_MAX: manejarEditarAlarmaTempMax(0, false); break;
-        case ESTADO_EDITAR_ALARMA_HUM_MIN: manejarEditarAlarmaHumMin(0, false); break;
-        case ESTADO_EDITAR_ALARMA_HUM_MAX: manejarEditarAlarmaHumMax(0, false); break;
-        case ESTADO_EDITAR_ALARMA_CO2_MIN: manejarEditarAlarmaCO2Min(0, false); break;
-        case ESTADO_EDITAR_ALARMA_CO2_MAX: manejarEditarAlarmaCO2Max(0, false); break;
-      }
-      necesitaRefrescarLCD = false;
+  if (deltaEncoder != 0) {
+    indiceMenuPrincipal += deltaEncoder;
+    if (indiceMenuPrincipal < 0) indiceMenuPrincipal = TOTAL_OPCIONES_MENU_PRINCIPAL - 1;
+    if (indiceMenuPrincipal >= TOTAL_OPCIONES_MENU_PRINCIPAL) indiceMenuPrincipal = 0;
+    necesitaRefrescarLCD = true; // Forzar refresco si hay cambio
   }
 
-  // Lógica de modo de funcionamiento (ejecución continua)
-  // Se llama a manejarModoFuncionamiento continuamente cuando el estado es MODO_FUNCIONAMIENTO
-  if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO) {
-      manejarModoFuncionamiento(deltaEncoderActual, switchPulsadoActual);
+  // Lógica de scroll
+  if (indiceMenuPrincipal >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
+    desplazamientoScroll = indiceMenuPrincipal - OPCIONES_VISIBLES_PANTALLA + 1;
+  } else if (indiceMenuPrincipal < desplazamientoScroll) {
+    desplazamientoScroll = indiceMenuPrincipal;
   }
 
-  delay(10);
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
+      int indiceActual = desplazamientoScroll + i;
+      if (indiceActual < TOTAL_OPCIONES_MENU_PRINCIPAL) {
+        lcd.setCursor(0, i);
+        if (indiceActual == indiceMenuPrincipal) {
+          lcd.print(">");
+        } else {
+          lcd.print(" ");
+        }
+        lcd.print(opcionesMenuPrincipal[indiceActual]);
+      }
+    }
+  }
 }
 
-// ---------------- FUNCIONES DE INTERRUPCIÓN (ISR) ----------------
+void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Editar Setpoints");
+    necesitaRefrescarLCD = false;
+  }
+
+  if (deltaEncoder != 0) {
+    indiceSubMenuSetpoints += deltaEncoder;
+    if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
+    if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
+    necesitaRefrescarLCD = true;
+  }
+
+  if (necesitaRefrescarLCD) {
+    lcd.setCursor(0, 1);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 2);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 3);
+    lcd.print("                "); // Limpiar línea
+
+    lcd.setCursor(0, 1);
+    switch (indiceSubMenuSetpoints) {
+      case 0:
+        lcd.print("> Temp: " + String(setpointTemperatura, 1) + " C");
+        break;
+      case 1:
+        lcd.print("> Hum: " + String(setpointHumedad, 0) + " %");
+        break;
+      case 2:
+        lcd.print("> CO2: " + String(setpointCO2) + " ppm");
+        break;
+      case 3:
+        lcd.print("> Volver");
+        break;
+    }
+    necesitaRefrescarLCD = false;
+  }
+}
+
+void manejarSubMenuAlarmas(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("SubMenu Alarmas");
+    necesitaRefrescarLCD = false;
+  }
+
+  if (deltaEncoder != 0) {
+    indiceSubMenuAlarmas += deltaEncoder;
+    if (indiceSubMenuAlarmas < 0) indiceSubMenuAlarmas = TOTAL_OPCIONES_SUBMENU_ALARMAS - 1;
+    if (indiceSubMenuAlarmas >= TOTAL_OPCIONES_SUBMENU_ALARMAS) indiceSubMenuAlarmas = 0;
+    necesitaRefrescarLCD = true;
+  }
+
+  if (necesitaRefrescarLCD) {
+    lcd.setCursor(0, 1);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 2);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 3);
+    lcd.print("                "); // Limpiar línea
+
+    lcd.setCursor(0, 1);
+    switch (indiceSubMenuAlarmas) {
+      case 0:
+        lcd.print("> Mostrar Alarmas");
+        break;
+      case 1:
+        lcd.print("> Editar Alarmas");
+        break;
+      case 2:
+        lcd.print("> Volver");
+        break;
+    }
+    necesitaRefrescarLCD = false;
+  }
+}
+
+
+void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Confirmar Modo?");
+    necesitaRefrescarLCD = false;
+  }
+
+  if (deltaEncoder != 0) {
+    indiceConfirmacion += deltaEncoder;
+    if (indiceConfirmacion < 0) indiceConfirmacion = TOTAL_OPCIONES_CONFIRMACION - 1;
+    if (indiceConfirmacion >= TOTAL_OPCIONES_CONFIRMACION) indiceConfirmacion = 0;
+    necesitaRefrescarLCD = true;
+  }
+
+  if (necesitaRefrescarLCD) {
+    lcd.setCursor(0, 2);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 1);
+    if (indiceConfirmacion == 0) { // SI
+      lcd.print("> SI   NO");
+    } else { // NO
+      lcd.print("  SI > NO");
+    }
+    necesitaRefrescarLCD = false;
+  }
+}
+
+void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    if (!initialMessageDisplayed) {
+      lcd.clear();
+      lcd.home();
+      lcd.print("Modo Funcionamiento");
+      lcd.setCursor(0,1);
+      lcd.print("Iniciado");
+      modoFuncionamientoStartTime = millis();
+      initialMessageDisplayed = true;
+    } else if (millis() - modoFuncionamientoStartTime > 2000) { // Después de 2 segundos, mostrar datos
+      lcd.clear();
+      // Actualizar pantalla solo si los valores han cambiado significativamente
+      if (abs(currentTemp - lastDisplayedTemp) > TEMP_DISPLAY_THRESHOLD || necesitaRefrescarLCD) {
+        lcd.home();
+        lcd.print("Temp: " + String(currentTemp, 1) + " C");
+        lastDisplayedTemp = currentTemp;
+      }
+      if (abs(currentHum - lastDisplayedHum) > HUM_DISPLAY_THRESHOLD || necesitaRefrescarLCD) {
+        lcd.setCursor(0,1);
+        lcd.print("Hum:  " + String(currentHum, 0) + " %");
+        lastDisplayedHum = currentHum;
+      }
+      if (abs(currentCO2 - lastDisplayedCO2) > CO2_DISPLAY_THRESHOLD || necesitaRefrescarLCD) {
+        lcd.setCursor(0,2);
+        lcd.print("CO2:  " + String(currentCO2) + " ppm");
+        lastDisplayedCO2 = currentCO2;
+      }
+      lcd.setCursor(0,3);
+      lcd.print("SW para Menu");
+      necesitaRefrescarLCD = false;
+    }
+  }
+
+  if (pulsadoSwitch) {
+    // Si se presiona el switch en modo funcionamiento, ir a la confirmación
+    estadoActualApp = ESTADO_CONFIRMACION_VOLVER_MENU;
+    indiceConfirmacion = 0; // Reiniciar índice a SI
+    necesitaRefrescarLCD = true;
+    initialMessageDisplayed = false; // Resetear para la próxima vez
+  }
+}
+
+void manejarConfirmacionVolverMenu(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Salir Modo Func?");
+    necesitaRefrescarLCD = false;
+  }
+
+  if (deltaEncoder != 0) {
+    indiceConfirmacion += deltaEncoder;
+    if (indiceConfirmacion < 0) indiceConfirmacion = TOTAL_OPCIONES_CONFIRMACION - 1;
+    if (indiceConfirmacion >= TOTAL_OPCIONES_CONFIRMACION) indiceConfirmacion = 0;
+    necesitaRefrescarLCD = true;
+  }
+
+  if (necesitaRefrescarLCD) {
+    lcd.setCursor(0, 2);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 1);
+    if (indiceConfirmacion == 0) { // SI
+      lcd.print("> SI   NO");
+    } else { // NO
+      lcd.print("  SI > NO");
+    }
+    necesitaRefrescarLCD = false;
+  }
+}
+
+void manejarEditarTemperatura(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Set Temp");
+  lcd.setCursor(0, 1);
+  lcd.print(String(setpointTemperatura, 1) + " C       "); // Limpiar el resto de la línea
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para guardar");
+
+  if (deltaEncoder != 0) {
+    setpointTemperatura += deltaEncoder * TEMP_PASO;
+    if (setpointTemperatura < TEMP_MIN) setpointTemperatura = TEMP_MIN;
+    if (setpointTemperatura > TEMP_MAX) setpointTemperatura = TEMP_MAX;
+    necesitaRefrescarLCD = true; // Para actualizar valor en pantalla
+  }
+}
+
+void manejarEditarHumedad(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Set Humedad");
+  lcd.setCursor(0, 1);
+  lcd.print(String(setpointHumedad, 0) + " %       "); // Limpiar el resto de la línea
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para guardar");
+
+  if (deltaEncoder != 0) {
+    setpointHumedad += deltaEncoder * HUM_PASO;
+    if (setpointHumedad < HUM_MIN) setpointHumedad = HUM_MIN;
+    if (setpointHumedad > HUM_MAX) setpointHumedad = HUM_MAX;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarCO2(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Set CO2");
+  lcd.setCursor(0, 1);
+  lcd.print(String(setpointCO2) + " ppm       "); // Limpiar el resto de la línea
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para guardar");
+
+  if (deltaEncoder != 0) {
+    setpointCO2 += deltaEncoder * CO2_PASO;
+    if (setpointCO2 < CO2_MIN) setpointCO2 = CO2_MIN;
+    if (setpointCO2 > CO2_MAX) setpointCO2 = CO2_MAX;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Editar Alarmas");
+    necesitaRefrescarLCD = false;
+  }
+
+  if (deltaEncoder != 0) {
+    indiceEditarAlarmas += deltaEncoder;
+    if (indiceEditarAlarmas < 0) indiceEditarAlarmas = TOTAL_OPCIONES_EDITAR_ALARMAS - 1;
+    if (indiceEditarAlarmas >= TOTAL_OPCIONES_EDITAR_ALARMAS) indiceEditarAlarmas = 0;
+    necesitaRefrescarLCD = true;
+  }
+
+  if (necesitaRefrescarLCD) {
+    lcd.setCursor(0, 1);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 2);
+    lcd.print("                "); // Limpiar línea
+    lcd.setCursor(0, 3);
+    lcd.print("                "); // Limpiar línea
+
+    lcd.setCursor(0, 1);
+    switch (indiceEditarAlarmas) {
+      case 0: lcd.print("> Temp Min: " + String(alarmaTempMin, 1)); break;
+      case 1: lcd.print("> Temp Max: " + String(alarmaTempMax, 1)); break;
+      case 2: lcd.print("> Hum Min: " + String(alarmaHumMin, 0)); break;
+      case 3: lcd.print("> Hum Max: " + String(alarmaHumMax, 0)); break;
+      case 4: lcd.print("> CO2 Min: " + String(alarmaCO2Min)); break;
+      case 5: lcd.print("> CO2 Max: " + String(alarmaCO2Max)); break;
+      case 6: lcd.print("> Guardar y Volver"); break;
+    }
+    necesitaRefrescarLCD = false;
+  }
+}
+
+void manejarEditarAlarmaTempMin(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma Temp Min");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaTempMin, 1) + " C       ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaTempMin += deltaEncoder * ALARMA_TEMP_PASO;
+    if (alarmaTempMin < ALARMA_TEMP_MIN_RANGO) alarmaTempMin = ALARMA_TEMP_MIN_RANGO;
+    if (alarmaTempMin > ALARMA_TEMP_MAX_RANGO) alarmaTempMin = ALARMA_TEMP_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmaTempMax(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma Temp Max");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaTempMax, 1) + " C       ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaTempMax += deltaEncoder * ALARMA_TEMP_PASO;
+    if (alarmaTempMax < ALARMA_TEMP_MIN_RANGO) alarmaTempMax = ALARMA_TEMP_MIN_RANGO;
+    if (alarmaTempMax > ALARMA_TEMP_MAX_RANGO) alarmaTempMax = ALARMA_TEMP_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmaHumMin(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma Hum Min");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaHumMin, 0) + " %       ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaHumMin += deltaEncoder * ALARMA_HUM_PASO;
+    if (alarmaHumMin < ALARMA_HUM_MIN_RANGO) alarmaHumMin = ALARMA_HUM_MIN_RANGO;
+    if (alarmaHumMin > ALARMA_HUM_MAX_RANGO) alarmaHumMin = ALARMA_HUM_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmaHumMax(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma Hum Max");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaHumMax, 0) + " %       ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaHumMax += deltaEncoder * ALARMA_HUM_PASO;
+    if (alarmaHumMax < ALARMA_HUM_MIN_RANGO) alarmaHumMax = ALARMA_HUM_MIN_RANGO;
+    if (alarmaHumMax > ALARMA_HUM_MAX_RANGO) alarmaHumMax = ALARMA_HUM_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmaCO2Min(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma CO2 Min");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaCO2Min) + " ppm      ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaCO2Min += deltaEncoder * ALARMA_CO2_PASO;
+    if (alarmaCO2Min < ALARMA_CO2_MIN_RANGO) alarmaCO2Min = ALARMA_CO2_MIN_RANGO;
+    if (alarmaCO2Min > ALARMA_CO2_MAX_RANGO) alarmaCO2Min = ALARMA_CO2_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    necesitaRefrescarLCD = false;
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("Alarma CO2 Max");
+  lcd.setCursor(0, 1);
+  lcd.print(String(alarmaCO2Max) + " ppm      ");
+  lcd.setCursor(0, 2);
+  lcd.print("Girar para ajustar");
+  lcd.setCursor(0, 3);
+  lcd.print("SW para volver");
+
+  if (deltaEncoder != 0) {
+    alarmaCO2Max += deltaEncoder * ALARMA_CO2_PASO;
+    if (alarmaCO2Max < ALARMA_CO2_MIN_RANGO) alarmaCO2Max = ALARMA_CO2_MIN_RANGO;
+    if (alarmaCO2Max > ALARMA_CO2_MAX_RANGO) alarmaCO2Max = ALARMA_CO2_MAX_RANGO;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+// ---------------- FUNCIONES AUXILIARES ----------------
 void IRAM_ATTR leerEncoderISR() {
-  unsigned long ahora = millis();
-  if (ahora - tiempoUltimaLecturaCLK > RETARDO_ANTI_REBOTE_ENCODER) {
+  unsigned long currentMillis = millis();
+  if (currentMillis - tiempoUltimaLecturaCLK > RETARDO_ANTI_REBOTE_ENCODER) {
     estadoClk = digitalRead(CLOCK_ENCODER);
     estadoDt = digitalRead(DT_ENCODER);
-
     if (estadoClk != estadoClkAnterior) {
       if (estadoDt != estadoClk) {
         valorEncoder++;
@@ -647,451 +822,43 @@ void IRAM_ATTR leerEncoderISR() {
       }
     }
     estadoClkAnterior = estadoClk;
-    tiempoUltimaLecturaCLK = ahora;
+    tiempoUltimaLecturaCLK = currentMillis;
   }
 }
 
 void IRAM_ATTR leerSwitchISR() {
-  unsigned long ahora = millis();
-  if (ahora - tiempoUltimaPresionSW > RETARDO_ANTI_REBOTE_SW) {
-    if (digitalRead(SW_ENCODER) == LOW) {
-      swFuePresionadoISR = true;
-      // necesitaRefrescarLCD = true; // No lo activamos aquí para no saturar en el modo funcionamiento
-                                    // La lógica de refresco para la salida de modo funcionamiento está en el loop principal
-    }
-    tiempoUltimaPresionSW = ahora;
+  unsigned long currentMillis = millis();
+  if (currentMillis - tiempoUltimaPresionSW > RETARDO_ANTI_REBOTE_SW) {
+    swFuePresionadoISR = true;
+    tiempoUltimaPresionSW = currentMillis;
   }
 }
 
-// ---------------- FUNCIONES DE MANEJO DE ESTADO (Solo dibujan) ----------------
-
-void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceMenuPrincipal < desplazamientoScroll) {
-      desplazamientoScroll = indiceMenuPrincipal;
-  } else if (indiceMenuPrincipal >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceMenuPrincipal - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
-
-  String opcionesMenuPrincipal[] = {
-    "Setpoints",
-    "Alarmas",
-    "Modo Funcionamiento"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_MENU_PRINCIPAL) {
-      String textoOpcion = opcionesMenuPrincipal[indiceOpcion];
-      String lineaMostrada = (indiceOpcion == indiceMenuPrincipal ? "> " : "  ") + textoOpcion;
-
-      int len = lineaMostrada.length();
-      if (len > LCD_COLUMNS) {
-          lineaMostrada = lineaMostrada.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              lineaMostrada += " ";
-          }
-      }
-      lcd.setCursor(0,i);
-      lcd.print(lineaMostrada);
-    } else {
-      lcd.setCursor(0,i);
-      lcd.print("                    ");
-    }
-  }
-}
-
-void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceSubMenuSetpoints < desplazamientoScroll) {
-      desplazamientoScroll = indiceSubMenuSetpoints;
-  } else if (indiceSubMenuSetpoints >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceSubMenuSetpoints - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
-
-  String opcionesSubMenuSetpoints[] = {
-    "T: " + String(setpointTemperatura, 1) + " C",
-    "H: " + String(setpointHumedad, 0) + " %",
-    "CO2: " + String(setpointCO2) + " ppm",
-    "Guardar y Volver"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_SUBMENU_SETPOINTS) {
-      String linea = (indiceOpcion == indiceSubMenuSetpoints ? "> " : "  ") + opcionesSubMenuSetpoints[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
-      }
-      lcd.setCursor(0,i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0,i);
-      lcd.print("                    ");
-    }
-  }
-}
-
-void manejarSubMenuAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceSubMenuAlarmas < desplazamientoScroll) {
-      desplazamientoScroll = indiceSubMenuAlarmas;
-  } else if (indiceSubMenuAlarmas >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceSubMenuAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
-
-  String opcionesSubMenuAlarmas[] = {
-    "Mostrar Alarmas",
-    "Editar Alarmas",
-    "Volver al Menu"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_SUBMENU_ALARMAS) {
-      String linea = (indiceOpcion == indiceSubMenuAlarmas ? "> " : "  ") + opcionesSubMenuAlarmas[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
-      }
-      lcd.setCursor(0,i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0,i);
-      lcd.print("                    ");
-    }
-  }
-}
-
-void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceEditarAlarmas < desplazamientoScroll) {
-      desplazamientoScroll = indiceEditarAlarmas;
-  } else if (indiceEditarAlarmas >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceEditarAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
-
-  String opcionesEditarAlarmas[] = {
-    "T Min: " + String(alarmaTempMin, 1) + " C",
-    "T Max: " + String(alarmaTempMax, 1) + " C",
-    "H Min: " + String(alarmaHumMin, 0) + " %",
-    "H Max: " + String(alarmaHumMax, 0) + " %",
-    "CO2 Min: " + String(alarmaCO2Min) + " ppm",
-    "CO2 Max: " + String(alarmaCO2Max) + " "
-"ppm",
-    "Guardar y Volver"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_EDITAR_ALARMAS) {
-      String linea = (indiceOpcion == indiceEditarAlarmas ? "> " : "  ") + opcionesEditarAlarmas[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
-      }
-      lcd.setCursor(0,i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0,i);
-      lcd.print("                    ");
-    }
-  }
-}
-
-void manejarMostrarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.setCursor(0,0);
-  lcd.print("Mostrar Alarmas     ");
-  lcd.setCursor(0, 1);
-  lcd.print("T Min:" + String(alarmaTempMin, 1) + " Max:" + String(alarmaTempMax, 1));
-  lcd.setCursor(0, 2);
-  lcd.print("H Min:" + String(alarmaHumMin, 0) + " Max:" + String(alarmaHumMax, 0));
-  lcd.setCursor(0, 3);
-  lcd.print("CO2 Min:" + String(alarmaCO2Min) + " Max:" + String(alarmaCO2Max));
-}
-
-void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
-    lcd.setCursor(0,0);
-    lcd.print("Cambiar a M. Fun?");
-    lcd.setCursor(0,1);
-    lcd.print("                    ");
-
-    String opcionesConfirmacion[] = {"SI", "NO"};
-
-    for (int i = 0; i < TOTAL_OPCIONES_CONFIRMACION; i++) {
-        String linea = (i == indiceConfirmacion ? "> " : "  ") + opcionesConfirmacion[i];
-        lcd.setCursor(0, 2 + i);
-        lcd.print(linea);
-    }
-}
-
-void manejarConfirmacionVolverMenu(int deltaEncoder, bool pulsadoSwitch) {
-    lcd.setCursor(0, 0);
-    lcd.print("Volver al Menu?");
-    lcd.setCursor(0, 1);
-    lcd.print("                    ");
-
-    String opcionesConfirmacion[] = {"SI", "NO"};
-
-    for (int i = 0; i < TOTAL_OPCIONES_CONFIRMACION; i++) {
-        String linea = (i == indiceConfirmacion ? "> " : "  ") + opcionesConfirmacion[i];
-        lcd.setCursor(0, 2 + i);
-        lcd.print(linea);
-    }
-}
-
-// ETIQUETA: Implementacion de la funcion para leer sensores
 void leerSensores() {
-  dhtSensor.leerValores();
-  float temp = dhtSensor.getTemperatura();
-  float hum = dhtSensor.getHumedad();
+  currentTemp = dhtSensor.getTemperatura();
+  currentHum = dhtSensor.getHumedad();
+  currentCO2 = gasSensor.leerCO2();
 
-  // Solo leer CO2 si el sensor esta listo
-  float mq2Co2 = -1.0;
-  if (gasSensor.isReady()) {
-    mq2Co2 = gasSensor.leerCO2(); // Asumiendo que esta es la funcion para leer CO2 de MQ2
-  } else {
-    Serial.println("Calentando sensor MQ2, CO2 no disponible.");
-  }
+  Serial.print("Temp: "); Serial.print(currentTemp); Serial.print(" C, Hum: "); Serial.print(currentHum); Serial.print(" %, CO2: "); Serial.print(currentCO2); Serial.println(" ppm");
 
-  // Actualizar valores actuales solo si son validos
-  if (!isnan(temp) && !isnan(hum)) {
-    currentTemp = temp;
-    currentHum = hum;
-  }
-  if (mq2Co2 >= 0) { // MQ2Sensor.leerCO2() devuelve 0 si no esta listo, o un valor estimado
-    currentCO2 = mq2Co2;
-  }
-
-  // Lógica para la bandera de CO2 bajo
-  if (estaEnDefectoCO2()) {
-      banderaBajoCO2 = true;
-      Serial.println("ALARMA: CO2 BAJO DETECTADO. POSIBLE INCUBADORA MAL CERRADA.");
-  } else {
-      banderaBajoCO2 = false;
+  // Enviar datos a Firebase solo si estamos en modo funcionamiento
+  if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO) {
+    firebase.sendData(currentTemp, currentHum, currentCO2);
   }
 }
 
-// ETIQUETA: Implementacion de manejarModoFuncionamiento
-void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
-    unsigned long currentMillis = millis();
-
-    // Mostrar mensaje inicial por 3 segundos
-    if (!initialMessageDisplayed) {
-        lcd.clear();
-        lcd.setCursor(0, 0);
-        lcd.print("Inicializando");
-        lcd.setCursor(0, 1);
-        lcd.print("sistema...");
-        modoFuncionamientoStartTime = currentMillis;
-        initialMessageDisplayed = true;
-    }
-
-    // Si todavía estamos dentro del tiempo del mensaje inicial, no hacemos nada más
-    if (currentMillis - modoFuncionamientoStartTime < 3000) {
-        return;
-    }
-
-    // Leer sensores
-    leerSensores();
-
-    // --- Control del Calefactor (Relé 2 - D0) ---
-    // Enciende si la temperatura cae por debajo del setpoint - 2°C
-    if (currentTemp <= setpointTemperatura - HISTERESIS_TEMP_ENCENDER_CALEFACTOR) {
-        digitalWrite(RELAY2, LOW); // Enciende el calefactor
-    }
-    // Apaga si la temperatura sube por encima del setpoint + 1.5°C
-    else if (currentTemp >= setpointTemperatura + HISTERESIS_TEMP_APAGAR_CALEFACTOR) {
-        digitalWrite(RELAY2, HIGH); // Apaga el calefactor
-    }
-
-    // --- Control del Ventilador (Relé 1 - D8) ---
-
-    // Lógica para la ventilación programada de CO2
-    // PRIORIDAD: Solo activar ventilación programada si el ventilador está inactivo
-    // y no hay condiciones de exceso activando el ventilador por umbrales.
-    if (!ventilacionProgramadaActiva &&
-        (currentMillis - ultimoTiempoVentilacionProgramada >= INTERVALO_VENTILACION_PROGRAMADA) &&
-        (estadoVentiladorActual == VENTILADOR_INACTIVO) &&
-        !estaEnExcesoTemperatura() && !estaEnExcesoHumedad() && !estaEnExcesoCO2() )
-    {
-        ventilacionProgramadaActiva = true;
-        digitalWrite(RELAY1, LOW); // Enciende el ventilador para pulso programado
-        temporizadorActivoVentilador = currentMillis; // Reiniciar temporizador del ventilador para la duración programada
-        Serial.println("Ventilación programada de CO2 iniciada.");
-    }
-
-    if (ventilacionProgramadaActiva) {
-        if (currentMillis - temporizadorActivoVentilador >= DURACION_VENTILACION_PROGRAMADA) {
-            digitalWrite(RELAY1, HIGH); // Apaga el ventilador
-            ventilacionProgramadaActiva = false;
-            ultimoTiempoVentilacionProgramada = currentMillis; // Actualizar el tiempo de la última ventilación
-            Serial.println("Ventilación programada de CO2 finalizada.");
-        }
-        // Mientras la ventilación programada está activa, la lógica de histeresis del ventilador se pausará.
-        // Después de que la ventilación programada finalice, el sistema volverá a evaluar las condiciones por umbral.
-    } else {
-        // Lógica de control por histeresis (solo si no hay ventilación programada activa)
-        switch (estadoVentiladorActual) {
-            case VENTILADOR_INACTIVO:
-                // Verificar si alguna condición de activación se cumple
-                if (estaEnExcesoTemperatura()) {
-                    razonActivacionVentilador = TEMPERATURA_ALTA;
-                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
-                    temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
-                    Serial.println("Ventilador ON (Temp alta)");
-                } else if (estaEnExcesoHumedad()) {
-                    razonActivacionVentilador = HUMEDAD_ALTA;
-                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
-                    temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
-                    Serial.println("Ventilador ON (Humedad alta)");
-                } else if (estaEnExcesoCO2()) {
-                    razonActivacionVentilador = CO2_ALTO;
-                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
-                    temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
-                    Serial.println("Ventilador ON (CO2 alto)");
-                }
-                break;
-
-            case VENTILADOR_ENCENDIDO_3S:
-                if (currentMillis - temporizadorActivoVentilador >= 3000) { // 3 segundos
-                    digitalWrite(RELAY1, HIGH); // Apaga el ventilador
-                    estadoVentiladorActual = VENTILADOR_APAGADO_5S;
-                    temporizadorActivoVentilador = currentMillis;
-                    Serial.println("Ventilador OFF (después de 3s)");
-                }
-                break;
-
-            case VENTILADOR_APAGADO_5S:
-                if (currentMillis - temporizadorActivoVentilador >= 5000) { // 5 segundos
-                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S; // Pasar al siguiente pulso
-                    temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador de nuevo
-                    Serial.println("Ventilador ON (pulso de 5s)");
-                }
-                break;
-
-            case VENTILADOR_ENCENDIDO_5S:
-                if (currentMillis - temporizadorActivoVentilador >= 5000) { // 5 segundos
-                    digitalWrite(RELAY1, HIGH); // Apaga el ventilador
-                    estadoVentiladorActual = VENTILADOR_ESPERA_ESTABILIZACION;
-                    temporizadorActivoVentilador = currentMillis;
-                    Serial.println("Ventilador OFF (después de 5s)");
-                }
-                break;
-
-            case VENTILADOR_ESPERA_ESTABILIZACION:
-                if (currentMillis - temporizadorActivoVentilador >= 15000) { // 15 segundos
-                    // Evaluar si las condiciones han mejorado
-                    bool condicionesMejoraron = false;
-                    switch (razonActivacionVentilador) {
-                        case TEMPERATURA_ALTA:
-                            if (currentTemp <= setpointTemperatura + UMBRAL_TEMP_APAGAR_VENTILADOR) {
-                                condicionesMejoraron = true;
-                            }
-                            break;
-                        case HUMEDAD_ALTA:
-                            if (currentHum <= setpointHumedad + UMBRAL_HUM_APAGAR_VENTILADOR) {
-                                condicionesMejoraron = true;
-                            }
-                            break;
-                        case CO2_ALTO:
-                            if (currentCO2 <= setpointCO2 + UMBRAL_CO2_APAGAR_VENTILADOR) {
-                                condicionesMejoraron = true;
-                            }
-                            break;
-                        case NINGUNA: // No debería llegar aquí si el ventilador está activo
-                            condicionesMejoraron = true;
-                            break;
-                    }
-
-                    if (condicionesMejoraron) {
-                        estadoVentiladorActual = VENTILADOR_INACTIVO; // Vuelve a inactivo, condiciones mejoraron
-                        razonActivacionVentilador = NINGUNA;
-                        Serial.println("Ventilador IDLE (condiciones mejoraron)");
-                    } else {
-                        estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S; // Repite el ciclo de 5s, condiciones no mejoraron
-                        temporizadorActivoVentilador = currentMillis;
-                        digitalWrite(RELAY1, LOW); // Enciende el ventilador de nuevo
-                        Serial.println("Ventilador ON (reinicio ciclo, condiciones no mejoraron)");
-                    }
-                }
-                break;
-        }
-    }
-
-
-    // Comprobar cambios y actualizar LCD
-    bool changed = false;
-    if (abs(currentTemp - lastDisplayedTemp) > TEMP_DISPLAY_THRESHOLD || lastDisplayedTemp == -999.0) {
-        lastDisplayedTemp = currentTemp;
-        changed = true;
-    }
-    if (abs(currentHum - lastDisplayedHum) > HUM_DISPLAY_THRESHOLD || lastDisplayedHum == -999.0) {
-        lastDisplayedHum = currentHum;
-        changed = true;
-    }
-    if (abs(currentCO2 - lastDisplayedCO2) > CO2_DISPLAY_THRESHOLD || lastDisplayedCO2 == -999.0) {
-        lastDisplayedCO2 = currentCO2;
-        changed = true;
-    }
-
-    if (changed) {
-        lcd.clear(); // Limpiar solo cuando hay nuevos datos para imprimir
-        lcd.setCursor(0, 0);
-        lcd.print("T: " + String(lastDisplayedTemp, 1) + " C");
-        lcd.setCursor(0, 1);
-        lcd.print("H: " + String(lastDisplayedHum, 0) + " %");
-        lcd.setCursor(0, 2);
-        lcd.print("CO2: " + String((int)lastDisplayedCO2) + " ppm");
-        lcd.setCursor(0, 3);
-        lcd.print("SW para Menu        "); // Mantener el mensaje para salir
-    }
-
-    // Envío de datos de sensores a Firebase (se basa en la lógica interna de sendData para cambios significativos)
-    if(firebase.sendData(currentTemp, currentHum, currentCO2)) {
-        Serial.println("Datos enviados a Firebase");
-    } else {
-        Serial.println("Sin cambios significativos (o error de Firebase)");
-    }
-}
-
-
-// ---------------- FUNCIONES EEPROM ----------------
 void guardarSetpointsEEPROM() {
   EEPROM.begin(EEPROM_SIZE);
-  int addr = 0;
-  EEPROM.put(addr, setpointTemperatura); addr += sizeof(float);
-  EEPROM.put(addr, setpointHumedad);     addr += sizeof(float);
-  EEPROM.put(addr, setpointCO2);         addr += sizeof(int);
-
-  EEPROM.put(addr, alarmaTempMin);       addr += sizeof(float);
-  EEPROM.put(addr, alarmaTempMax);       addr += sizeof(float);
-  EEPROM.put(addr, alarmaHumMin);        addr += sizeof(float);
-  EEPROM.put(addr, alarmaHumMax);        addr += sizeof(float);
-  EEPROM.put(addr, alarmaCO2Min);        addr += sizeof(int);
-  EEPROM.put(addr, alarmaCO2Max);        addr += sizeof(int);
-
+  EEPROM.put(0, setpointTemperatura);
+  EEPROM.put(sizeof(float), setpointHumedad);
+  EEPROM.put(2 * sizeof(float), setpointCO2);
+  // Guardar alarmas
+  EEPROM.put(3 * sizeof(float), alarmaTempMin);
+  EEPROM.put(4 * sizeof(float), alarmaTempMax);
+  EEPROM.put(5 * sizeof(float), alarmaHumMin);
+  EEPROM.put(6 * sizeof(float), alarmaHumMax);
+  EEPROM.put(7 * sizeof(float), alarmaCO2Min);
+  EEPROM.put(7 * sizeof(float) + sizeof(int), alarmaCO2Max);
   EEPROM.commit();
   EEPROM.end();
   Serial.println("Setpoints y Alarmas guardados en EEPROM.");
@@ -1099,189 +866,666 @@ void guardarSetpointsEEPROM() {
 
 void cargarSetpointsEEPROM() {
   EEPROM.begin(EEPROM_SIZE);
-  int addr = 0;
-  EEPROM.get(addr, setpointTemperatura); addr += sizeof(float);
-  EEPROM.get(addr, setpointHumedad);     addr += sizeof(float);
-  EEPROM.get(addr, setpointCO2);         addr += sizeof(int);
-
-  EEPROM.get(addr, alarmaTempMin);       addr += sizeof(float);
-  EEPROM.get(addr, alarmaTempMax);       addr += sizeof(float);
-  EEPROM.get(addr, alarmaHumMin);        addr += sizeof(float);
-  EEPROM.get(addr, alarmaHumMax);        addr += sizeof(float);
-  EEPROM.get(addr, alarmaCO2Min);        addr += sizeof(int);
-  EEPROM.get(addr, alarmaCO2Max);        addr += sizeof(int);
+  EEPROM.get(0, setpointTemperatura);
+  EEPROM.get(sizeof(float), setpointHumedad);
+  EEPROM.get(2 * sizeof(float), setpointCO2);
+  // Cargar alarmas
+  EEPROM.get(3 * sizeof(float), alarmaTempMin);
+  EEPROM.get(4 * sizeof(float), alarmaTempMax);
+  EEPROM.get(5 * sizeof(float), alarmaHumMin);
+  EEPROM.get(6 * sizeof(float), alarmaHumMax);
+  EEPROM.get(6 * sizeof(float) + sizeof(int), alarmaCO2Min); // Corregido: sizeof(float) + sizeof(int)
+  EEPROM.get(6 * sizeof(float) + 2 * sizeof(int), alarmaCO2Max); // Corregido: sizeof(float) + 2 * sizeof(int)
 
   EEPROM.end();
+  Serial.println("Setpoints y Alarmas cargados de EEPROM.");
 
-  // Validaciones para Setpoints
-  if (setpointTemperatura < TEMP_MIN || setpointTemperatura > TEMP_MAX || isnan(setpointTemperatura)) {
+  // Validar rangos después de cargar de EEPROM
+  if (setpointTemperatura < TEMP_MIN || setpointTemperatura > TEMP_MAX) {
     setpointTemperatura = 25.0;
   }
-  if (setpointHumedad < HUM_MIN || setpointHumedad > HUM_MAX || isnan(setpointHumedad)) {
+  if (setpointHumedad < HUM_MIN || setpointHumedad > HUM_MAX) {
     setpointHumedad = 70.0;
   }
-  if (setpointCO2 < CO2_MIN || setpointCO2 > CO2_MAX) { // Usar los nuevos rangos ampliados
-    setpointCO2 = 6000; // Nuevo valor por defecto
+  if (setpointCO2 < CO2_MIN || setpointCO2 > CO2_MAX) {
+    setpointCO2 = 6000;
   }
-
-  // Validaciones para Alarmas
-  if (alarmaTempMin < ALARMA_TEMP_MIN_RANGO || alarmaTempMin > ALARMA_TEMP_MAX_RANGO || isnan(alarmaTempMin)) {
-      alarmaTempMin = 18.0;
+  if (alarmaTempMin < ALARMA_TEMP_MIN_RANGO || alarmaTempMin > ALARMA_TEMP_MAX_RANGO) {
+    alarmaTempMin = 18.0;
   }
-  if (alarmaTempMax < ALARMA_TEMP_MIN_RANGO || alarmaTempMax > ALARMA_TEMP_MAX_RANGO || isnan(alarmaTempMax)) {
-      alarmaTempMax = 30.0;
+  if (alarmaTempMax < ALARMA_TEMP_MIN_RANGO || alarmaTempMax > ALARMA_TEMP_MAX_RANGO) {
+    alarmaTempMax = 30.0;
   }
-  if (alarmaHumMin < ALARMA_HUM_MIN_RANGO || alarmaHumMin > ALARMA_HUM_MAX_RANGO || isnan(alarmaHumMin)) {
-      alarmaHumMin = 50.0;
+  if (alarmaHumMin < ALARMA_HUM_MIN_RANGO || alarmaHumMin > ALARMA_HUM_MAX_RANGO) {
+    alarmaHumMin = 50.0;
   }
-  if (alarmaHumMax < ALARMA_HUM_MIN_RANGO || alarmaHumMax > ALARMA_HUM_MAX_RANGO || isnan(alarmaHumMax)) {
-      alarmaHumMax = 90.0;
+  if (alarmaHumMax < ALARMA_HUM_MIN_RANGO || alarmaHumMax > ALARMA_HUM_MAX_RANGO) {
+    alarmaHumMax = 90.0;
   }
-  if (alarmaCO2Min < ALARMA_CO2_MIN_RANGO || alarmaCO2Min > ALARMA_CO2_MAX_RANGO) { // Usar nuevos rangos
-      alarmaCO2Min = 600; // Por revisar con el usuario
+  if (alarmaCO2Min < ALARMA_CO2_MIN_RANGO || alarmaCO2Min > ALARMA_CO2_MAX_RANGO) {
+    alarmaCO2Min = 600;
   }
-  if (alarmaCO2Max < ALARMA_CO2_MIN_RANGO || alarmaCO2Max > ALARMA_CO2_MAX_RANGO) { // Usar nuevos rangos
-      alarmaCO2Max = 1200; // Por revisar con el usuario
+  if (alarmaCO2Max < ALARMA_CO2_MIN_RANGO || alarmaCO2Max > ALARMA_CO2_MAX_RANGO) {
+    alarmaCO2Max = 1200;
   }
-
-  Serial.println("Setpoints y Alarmas cargados de EEPROM:");
-  Serial.printf("Temp: %.1f, Hum: %.1f, CO2: %d\n", setpointTemperatura, setpointHumedad, setpointCO2);
-  Serial.printf("Alarma Temp Min: %.1f, Max: %.1f\n", alarmaTempMin, alarmaTempMax);
-  Serial.printf("Alarma Hum Min: %.1f, Max: %.1f\n", alarmaHumMin, alarmaHumMax);
-  Serial.printf("Alarma CO2 Min: %d, Max: %d\n", alarmaCO2Min, alarmaCO2Max);
 }
 
-// *** Nueva función para guardar el estado de la aplicación en EEPROM ***
 void guardarEstadoAppEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
-    EEPROM.put(EEPROM_APP_STATE_ADDR, (uint8_t)(estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO ? 1 : 0));
+    lastAppStateFlag = (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO) ? 1 : 0;
+    EEPROM.put(EEPROM_APP_STATE_ADDR, lastAppStateFlag);
     EEPROM.commit();
     EEPROM.end();
-    Serial.printf("Estado de app guardado en EEPROM: %d\n", lastAppStateFlag);
+    Serial.print("Estado de la aplicación guardado en EEPROM: ");
+    Serial.println(lastAppStateFlag);
 }
 
-// *** Nueva función para cargar el estado de la aplicación desde EEPROM ***
 void cargarEstadoAppEEPROM() {
     EEPROM.begin(EEPROM_SIZE);
     EEPROM.get(EEPROM_APP_STATE_ADDR, lastAppStateFlag);
     EEPROM.end();
-    // Validar si el valor es consistente (0 o 1)
-    if (lastAppStateFlag != 0 && lastAppStateFlag != 1) {
-        lastAppStateFlag = 0; // Por defecto, si es inconsistente, ir al menú
-    }
-    Serial.printf("Estado de app cargado de EEPROM: %d\n", lastAppStateFlag);
+    Serial.print("Estado de la aplicación cargado de EEPROM: ");
+    Serial.println(lastAppStateFlag);
 }
 
 
-void manejarEditarTemperatura(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.setCursor(0, 0);
-  lcd.print("Temperatura         ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(setpointTemperatura, 1) + " C        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarHumedad(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Humedad             ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(setpointHumedad, 0) + " %        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarCO2(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("CO2                 ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(setpointCO2) + " ppm       ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaTempMin(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Alarma Temp Min     ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(alarmaTempMin, 1) + " C        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaTempMax(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Alarma Temp Max     ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(alarmaTempMax, 1) + " C        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaHumMin(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Alarma Hum Min      ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(alarmaHumMin, 0) + " %        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaHumMax(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Alarma Hum Max      ");
-  lcd.print(String(alarmaHumMax, 0) + " %        ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaCO2Min(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.home();
-  lcd.print("Alarma CO2 Min      ");
-  lcd.print(String(alarmaCO2Min) + " ppm       ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
-    lcd.home();
-  lcd.print("Alarma CO2 Max      ");
-  lcd.print(String(alarmaCO2Max) + " ppm       ");
-  lcd.setCursor(0, 2);
-  lcd.print("                    ");
-  lcd.setCursor(0, 3);
-  lcd.print("SW para volver      ");
-}
-
-// ---------------- FUNCIONES AUXILIARES DE ESTADO DEL SISTEMA ----------------
+// Funciones auxiliares para la prioridad de ventilación (se mantienen igual)
 bool estaEnExcesoTemperatura() {
-    return currentTemp > (setpointTemperatura + UMBRAL_TEMP_VENTILADOR);
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentTemp > (setpointTemperatura + UMBRAL_TEMP_VENTILADOR);
+}
+
+bool estaEnDefectoTemperatura() {
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentTemp < (setpointTemperatura - UMBRAL_TEMP_VENTILADOR);
 }
 
 bool estaEnExcesoHumedad() {
-    return currentHum > (setpointHumedad + UMBRAL_HUM_VENTILADOR);
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentHum > (setpointHumedad + UMBRAL_HUM_VENTILADOR);
+}
+
+bool estaEnDefectoHumedad() {
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentHum < (setpointHumedad - UMBRAL_HUM_VENTILADOR);
 }
 
 bool estaEnExcesoCO2() {
-    return currentCO2 > (setpointCO2 + UMBRAL_CO2_VENTILADOR);
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentCO2 > (setpointCO2 + UMBRAL_CO2_VENTILADOR);
 }
 
 bool estaEnDefectoCO2() {
-    return currentCO2 < alarmaCO2Min; // Usa la alarmaCO2Min para detectar CO2 bajo
+  // Asegúrate de que esta lógica esté completa y sea correcta
+  return currentCO2 < (setpointCO2 - UMBRAL_CO2_VENTILADOR);
+}
+
+// ---------------- FUNCIONES DE CONTROL DE RELÉS Y SENSORES ----------------
+void manejarVentilador(unsigned long currentMillis) { //
+    bool necesitaVentilarPorSensores = estaEnExcesoTemperatura() || estaEnExcesoHumedad() || estaEnExcesoCO2();
+    bool necesitaVentilarPorCO2Bajo = estaEnDefectoCO2();
+
+    // Actualizar razonActivacionVentilador si cambia la condición de exceso
+    if (necesitaVentilarPorSensores) {
+        if (estaEnExcesoTemperatura()) razonActivacionVentilador = TEMPERATURA_ALTA;
+        else if (estaEnExcesoHumedad()) razonActivacionVentilador = HUMEDAD_ALTA;
+        else if (estaEnExcesoCO2()) razonActivacionVentilador = CO2_ALTO;
+    } else {
+        // Solo resetear si la razón no es por CO2 bajo
+        if (razonActivacionVentilador != NINGUNA && !necesitaVentilarPorCO2Bajo) {
+             razonActivacionVentilador = NINGUNA;
+        }
+    }
+
+    // Lógica para ventilación programada de CO2
+    if (!ventilacionProgramadaActiva && (currentMillis - ultimoTiempoVentilacionProgramada >= INTERVALO_VENTILACION_PROGRAMADA)) {
+        ventilacionProgramadaActiva = true;
+        tiempoInicioVentilacionProgramada = currentMillis;
+        Serial.println("Ventilacion programada de CO2 iniciada.");
+        estadoVentilacionProgramada = VENTILACION_PROGRAMADA_ACTIVA;
+    }
+
+    // Gestionar el estado del ventilador
+    switch (estadoVentiladorActual) {
+        case VENTILADOR_INACTIVO:
+            if (necesitaVentilarPorSensores || ventilacionProgramadaActiva) {
+                digitalWrite(RELAY1, LOW); // Enciende ventilador
+                estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
+                temporizadorActivoVentilador = currentMillis;
+                Serial.print("Ventilador ON por: ");
+                if (necesitaVentilarPorSensores) {
+                    Serial.print(razonActivacionVentilador == TEMPERATURA_ALTA ? "Temp Alta" : (razonActivacionVentilador == HUMEDAD_ALTA ? "Hum Alta" : "CO2 Alto"));
+                } else if (ventilacionProgramadaActiva) {
+                    Serial.print("Ventilacion Programada");
+                }
+                Serial.println();
+            } else if (necesitaVentilarPorCO2Bajo) {
+                digitalWrite(RELAY1, HIGH); // Apaga ventilador
+            }
+            break;
+
+        case VENTILADOR_ENCENDIDO_3S:
+            if (currentMillis - temporizadorActivoVentilador >= 3000) {
+                digitalWrite(RELAY1, HIGH); // Apaga ventilador
+                estadoVentiladorActual = VENTILADOR_APAGADO_5S;
+                temporizadorActivoVentilador = currentMillis;
+                Serial.println("Ventilador OFF (3s completados)");
+            }
+            break;
+
+        case VENTILADOR_APAGADO_5S:
+            if (currentMillis - temporizadorActivoVentilador >= 5000) {
+                if (necesitaVentilarPorSensores) { // Si la condición persiste, vuelve a encender
+                    digitalWrite(RELAY1, LOW); // Enciende ventilador
+                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S;
+                    temporizadorActivoVentilador = currentMillis;
+                    Serial.print("Ventilador ON de nuevo por "); Serial.println(razonActivacionVentilador == TEMPERATURA_ALTA ? "Temp Alta" : (razonActivacionVentilador == HUMEDAD_ALTA ? "Hum Alta" : "CO2 Alto"));
+                } else if (ventilacionProgramadaActiva) { // Si la ventilación programada sigue activa
+                    digitalWrite(RELAY1, LOW); // Enciende ventilador
+                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S;
+                    temporizadorActivoVentilador = currentMillis;
+                    Serial.println("Ventilador ON de nuevo por Ventilacion Programada");
+                } else { // Si la condición ya no está activa
+                    estadoVentiladorActual = VENTILADOR_INACTIVO;
+                    razonActivacionVentilador = NINGUNA;
+                    Serial.println("Ventilador en INACTIVO (condicion ya no activa)");
+                }
+            }
+            break;
+
+        case VENTILADOR_ENCENDIDO_5S:
+            if (currentMillis - temporizadorActivoVentilador >= 5000) {
+                digitalWrite(RELAY1, HIGH); // Apaga ventilador
+                estadoVentiladorActual = VENTILADOR_ESPERA_ESTABILIZACION;
+                temporizadorActivoVentilador = currentMillis;
+                Serial.println("Ventilador OFF (5s completados)");
+            }
+            break;
+
+        case VENTILADOR_ESPERA_ESTABILIZACION:
+            if (currentMillis - temporizadorActivoVentilador >= 15000) { // Esperar 15 segundos
+                if (ventilacionProgramadaActiva) {
+                    if (currentMillis - tiempoInicioVentilacionProgramada >= DURACION_VENTILACION_PROGRAMADA) {
+                        ventilacionProgramadaActiva = false;
+                        ultimoTiempoVentilacionProgramada = currentMillis; // Reinicia el temporizador para la próxima ventilación programada
+                        Serial.println("Ventilacion programada de CO2 finalizada.");
+                        estadoVentilacionProgramada = VENTILACION_PROGRAMADA_INACTIVA;
+                        estadoVentiladorActual = VENTILADOR_INACTIVO; // Vuelve al estado inactivo
+                    } else {
+                        // Si la ventilación programada aún no termina, vuelve a encender el ventilador
+                        digitalWrite(RELAY1, LOW); // Enciende ventilador
+                        estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
+                        temporizadorActivoVentilador = currentMillis;
+                        Serial.println("Ventilador ON de nuevo por Ventilacion Programada.");
+                    }
+                } else { // Si no es ventilación programada, es por sensores
+                    if (necesitaVentilarPorSensores) { // Si la condición persiste, vuelve a encender el ventilador
+                        digitalWrite(RELAY1, LOW); // Enciende ventilador
+                        estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
+                        temporizadorActivoVentilador = millis();
+                        Serial.print("Ventilador ON de nuevo por "); Serial.println(razonActivacionVentilador == TEMPERATURA_ALTA ? "Temp Alta" : (razonActivacionVentilador == HUMEDAD_ALTA ? "Hum Alta" : "CO2 Alto"));
+                    } else { // Si la condición ya no está activa (por si hubo un cambio justo antes de este estado)
+                        estadoVentiladorActual = VENTILADOR_INACTIVO;
+                        razonActivacionVentilador = NINGUNA;
+                        Serial.println("Ventilador en INACTIVO (condicion ya no activa)");
+                    }
+                }
+            }
+            break;
+    }
+}
+
+void evaluarAlarmasCriticas() { //
+    // Temperatura Mínima Crítica
+    if (currentTemp < alarmaTempMin - 5.0 && !notificacionCriticaTempMinActiva) {
+        tiempoInicioAlarmaTempMin = millis();
+        notificacionCriticaTempMinActiva = true;
+        Serial.println("ALARMA CRITICA: Temperatura MUY BAJA!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentTemp >= alarmaTempMin - 5.0 && notificacionCriticaTempMinActiva) {
+        notificacionCriticaTempMinActiva = false;
+        Serial.println("Alarma Critica Temp Min resuelta.");
+    }
+
+    // Temperatura Máxima Crítica
+    if (currentTemp > alarmaTempMax + 5.0 && !notificacionCriticaTempMaxActiva) {
+        tiempoInicioAlarmaTempMax = millis();
+        notificacionCriticaTempMaxActiva = true;
+        Serial.println("ALARMA CRITICA: Temperatura MUY ALTA!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentTemp <= alarmaTempMax + 5.0 && notificacionCriticaTempMaxActiva) {
+        notificacionCriticaTempMaxActiva = false;
+        Serial.println("Alarma Critica Temp Max resuelta.");
+    }
+
+    // Humedad Mínima Crítica
+    if (currentHum < alarmaHumMin - 10.0 && !notificacionCriticaHumMinActiva) {
+        tiempoInicioAlarmaHumMin = millis();
+        notificacionCriticaHumMinActiva = true;
+        Serial.println("ALARMA CRITICA: Humedad MUY BAJA!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentHum >= alarmaHumMin - 10.0 && notificacionCriticaHumMinActiva) {
+        notificacionCriticaHumMinActiva = false;
+        Serial.println("Alarma Critica Hum Min resuelta.");
+    }
+
+    // Humedad Máxima Crítica
+    if (currentHum > alarmaHumMax + 10.0 && !notificacionCriticaHumMaxActiva) {
+        tiempoInicioAlarmaHumMax = millis();
+        notificacionCriticaHumMaxActiva = true;
+        Serial.println("ALARMA CRITICA: Humedad MUY ALTA!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentHum <= alarmaHumMax + 10.0 && notificacionCriticaHumMaxActiva) {
+        notificacionCriticaHumMaxActiva = false;
+        Serial.println("Alarma Critica Hum Max resuelta.");
+    }
+
+    // CO2 Mínimo Crítico
+    if (currentCO2 < alarmaCO2Min - 200 && !notificacionCriticaCO2MinActiva) {
+        tiempoInicioAlarmaCO2Min = millis();
+        notificacionCriticaCO2MinActiva = true;
+        Serial.println("ALARMA CRITICA: CO2 MUY BAJO!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentCO2 >= alarmaCO2Min - 200 && notificacionCriticaCO2MinActiva) {
+        notificacionCriticaCO2MinActiva = false;
+        Serial.println("Alarma Critica CO2 Min resuelta.");
+    }
+
+    // CO2 Máximo Crítico
+    if (currentCO2 > alarmaCO2Max + 200 && !notificacionCriticaCO2MaxActiva) {
+        tiempoInicioAlarmaCO2Max = millis();
+        notificacionCriticaCO2MaxActiva = true;
+        Serial.println("ALARMA CRITICA: CO2 MUY ALTO!");
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        alarmaDescartada = false;
+    } else if (currentCO2 <= alarmaCO2Max + 200 && notificacionCriticaCO2MaxActiva) {
+        notificacionCriticaCO2MaxActiva = false;
+        Serial.println("Alarma Critica CO2 Max resuelta.");
+    }
+
+    // Si no hay ninguna alarma crítica activa, y el estado actual es AVISO, vuelve al modo de funcionamiento
+    if (!notificacionCriticaTempMinActiva && !notificacionCriticaTempMaxActiva &&
+        !notificacionCriticaHumMinActiva && !notificacionCriticaHumMaxActiva &&
+        !notificacionCriticaCO2MinActiva && !notificacionCriticaCO2MaxActiva &&
+        estadoActualApp == ESTADO_ALARMA_CRITICA_AVISO) {
+        
+        if (alarmaDescartada){ //Solo vuelve al modo funcionamiento si el usuario descarto la alarma
+            estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
+            necesitaRefrescarLCD = true; // Forzar refresco para mostrar el modo funcionamiento
+        }
+    }
+}
+
+void manejarMostrarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Mostrando Alarmas"); // Título
+    // Aquí podrías añadir lógica para mostrar qué alarmas están activas
+    // Por ejemplo, iterar sobre las banderas de alarma y mostrarlas.
+    // lcd.print("Temp Alta: " + String(banderaAlarmaTempMaxActiva), 0, 1);
+    lcd.setCursor(0,3);
+    lcd.print("Presione SW para volver");
+    necesitaRefrescarLCD = false;
+  }
+
+  // Si el switch fue presionado, vuelve al submenu de alarmas
+  if (pulsadoSwitch) {
+    estadoActualApp = ESTADO_ALARMAS_SUBMENU;
+    necesitaRefrescarLCD = true;
+  }
+}
+
+void manejarAlarmaCriticaAviso(int deltaEncoder, bool pulsadoSwitch) {
+  if (necesitaRefrescarLCD) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("ALARMA CRITICA!!!"); // Título de la alarma
+    int lineCount = 1;
+
+    // --- (Tu lógica para mostrar los mensajes de alarma aquí) ---
+    // Asegúrate de que los mensajes se muestran solo si las notificaciones están activas
+    if (notificacionCriticaTempMinActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("Temp MINIMA BAJA!");
+    }
+    if (notificacionCriticaTempMaxActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("Temp MAXIMA ALTA!");
+    }
+    if (notificacionCriticaHumMinActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("Hum MINIMA BAJA!");
+    }
+    if (notificacionCriticaHumMaxActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("Hum MAXIMA ALTA!");
+    }
+    if (notificacionCriticaCO2MinActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("CO2 MINIMO BAJO!");
+    }
+    if (notificacionCriticaCO2MaxActiva && lineCount < 4) {
+      lcd.setCursor(0, lineCount++);
+      lcd.print("CO2 MAXIMO ALTO!");
+    }
+
+    if (lineCount < 4) {
+        lcd.setCursor(0, lineCount);
+        lcd.print("SW para descartar");
+    }
+
+    necesitaRefrescarLCD = false;
+  }
+
+  // --- PUNTO CLAVE: Lógica de descarte de la alarma al presionar SW ---
+  if (pulsadoSwitch) {
+    // Resetea todas las banderas de notificación activa
+    notificacionCriticaTempMinActiva = false;
+    notificacionCriticaTempMaxActiva = false;
+    notificacionCriticaHumMinActiva = false;
+    notificacionCriticaHumMaxActiva = false;
+    notificacionCriticaCO2MinActiva = false;
+    notificacionCriticaCO2MaxActiva = false;
+    
+    alarmaDescartada = true; // MUY IMPORTANTE: marca que la alarma ha sido "vista" y descartada
+    necesitaRefrescarLCD = true; // Para asegurar un refresco al salir del estado
+    Serial.println("SW presionado en Alarma Critica. Alarmas descartadas."); // Debug
+
+    // Cambia el estado actual directamente aquí al estado válido anterior
+    estadoActualApp = lastValidState; // Esto fuerza la salida del estado de alarma crítica
+  }
+}
+
+// ---------------- LOOP PRINCIPAL ----------------
+void loop() {
+  // Manejo del encoder para evitar lecturas duplicadas en el mismo ciclo
+  static unsigned long lastEncoderCheckTime = 0;
+  if (millis() - lastEncoderCheckTime > RETARDO_ANTI_REBOTE_ENCODER) {
+    if (digitalRead(CLOCK_ENCODER) != estadoClkAnterior || digitalRead(DT_ENCODER) != estadoDt) {
+      // Forzar una nueva lectura ISR para actualizar valorEncoder
+      leerEncoderISR();
+    }
+    lastEncoderCheckTime = millis();
+  }
+  // Manejo del switch para evitar lecturas duplicadas
+  static unsigned long lastSwitchCheckTime = 0;
+  if (millis() - lastSwitchCheckTime > RETARDO_ANTI_REBOTE_SW) {
+    if (digitalRead(SW_ENCODER) == LOW) { // Si el botón está presionado
+      leerSwitchISR(); // Esto pondrá swFuePresionadoISR en true
+    }
+    lastSwitchCheckTime = millis();
+  }
+ // noInterrupts();
+  int deltaEncoder = valorEncoder; // Renombrado de deltaEncoderActual
+  valorEncoder = 0;
+  bool pulsadoSwitch = swFuePresionadoISR; // Renombrado de switchPulsadoActual
+  if (swFuePresionadoISR) {
+    pulsadoSwitch = true;
+    swFuePresionadoISR = false; // Reset after reading
+  }
+  unsigned long currentMillis = millis();
+  //interrupts();
+
+  // --- Lectura de sensores (mantener siempre) ---
+  if (currentMillis - lastSensorReadTime >= INTERVALO_LECTURA_SENSORES) { // Uso de INTERVALO_LECTURA_SENSORES
+    leerSensores();
+    lastSensorReadTime = currentMillis; //
+    // Esto es importante para que el display de modo de funcionamiento se actualice
+    // solo cuando los datos se han leído y enviado.
+    if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO) {
+      necesitaRefrescarLCD = true;
+    }
+  }
+
+  leerSensores();
+  manejarVentilador(currentMillis);
+  evaluarAlarmasCriticas();
+  
+
+   // --- Lógica para entrar en el estado de alarma crítica ---
+  // Se entra a este estado si hay alarmas críticas activas Y NO han sido descartadas por el usuario.
+  // La bandera 'alarmaDescartada' permite al usuario temporalmente "silenciar" el aviso visual.
+  if (hayAlarmasCriticas()) {
+    if (!alarmaDescartada) { // Solo entra si NO está descartada
+      if (estadoActualApp != ESTADO_ALARMA_CRITICA_AVISO) {
+        lastValidState = estadoActualApp; // Guardar el estado actual antes de ir a la alarma
+        estadoActualApp = ESTADO_ALARMA_CRITICA_AVISO;
+        necesitaRefrescarLCD = true;
+        Serial.println("Entrando en estado de alarma crítica.");
+      }
+    }
+  } else { // Si NO hay alarmas críticas activas
+    // Si la bandera estaba en true, significa que el usuario la había descartado.
+    // Como ya no hay alarmas, reseteamos la bandera para futuras notificaciones.
+    if (alarmaDescartada) {
+      alarmaDescartada = false;
+      Serial.println("Alarmas críticas despejadas, reseteando alarmaDescartada.");
+    }
+  }
+    EstadoApp proximoEstado = estadoActualApp;  
+
+
+
+  switch (estadoActualApp) {
+    case ESTADO_MENU_PRINCIPAL:
+      if (deltaEncoder != 0) {
+        indiceMenuPrincipal += deltaEncoder;
+        if (indiceMenuPrincipal < 0) indiceMenuPrincipal = TOTAL_OPCIONES_MENU_PRINCIPAL - 1;
+        if (indiceMenuPrincipal >= TOTAL_OPCIONES_MENU_PRINCIPAL) indiceMenuPrincipal = 0;
+        necesitaRefrescarLCD = true;
+      }
+      if (pulsadoSwitch) {
+        switch (indiceMenuPrincipal) {
+          case 0: proximoEstado = ESTADO_EDITAR_SETPOINTS; break;
+          case 1: proximoEstado = ESTADO_ALARMAS_SUBMENU; break;
+          case 2: proximoEstado = ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO; indiceConfirmacion = 0; break;
+        }
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_SETPOINTS:
+      if (deltaEncoder != 0) {
+        indiceSubMenuSetpoints += deltaEncoder;
+        if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
+        if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
+        necesitaRefrescarLCD = true;
+      }
+      if (pulsadoSwitch) {
+        switch (indiceSubMenuSetpoints) {
+          case 0: proximoEstado = ESTADO_EDITAR_TEMP; break;
+          case 1: proximoEstado = ESTADO_EDITAR_HUM; break;
+          case 2: proximoEstado = ESTADO_EDITAR_CO2; break;
+          case 3: guardarSetpointsEEPROM(); proximoEstado = ESTADO_MENU_PRINCIPAL; break;
+        }
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_ALARMAS_SUBMENU:
+      if (deltaEncoder != 0) {
+        indiceSubMenuAlarmas += deltaEncoder;
+        if (indiceSubMenuAlarmas < 0) indiceSubMenuAlarmas = TOTAL_OPCIONES_SUBMENU_ALARMAS - 1;
+        if (indiceSubMenuAlarmas >= TOTAL_OPCIONES_SUBMENU_ALARMAS) indiceSubMenuAlarmas = 0;
+        necesitaRefrescarLCD = true;
+      }
+      if (pulsadoSwitch) {
+        switch (indiceSubMenuAlarmas) {
+          case 0: proximoEstado = ESTADO_MOSTRAR_ALARMAS; break;
+          case 1: proximoEstado = ESTADO_EDITAR_ALARMAS; break;
+          case 2: proximoEstado = ESTADO_MENU_PRINCIPAL; break;
+        }
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_MOSTRAR_ALARMAS:
+      manejarMostrarAlarmas(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) { // Lógica para volver si se presiona SW
+        proximoEstado = ESTADO_ALARMAS_SUBMENU;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMAS:
+      if (deltaEncoder != 0) {
+        indiceEditarAlarmas += deltaEncoder;
+        if (indiceEditarAlarmas < 0) indiceEditarAlarmas = TOTAL_OPCIONES_EDITAR_ALARMAS - 1;
+        if (indiceEditarAlarmas >= TOTAL_OPCIONES_EDITAR_ALARMAS) indiceEditarAlarmas = 0;
+        necesitaRefrescarLCD = true;
+      }
+      if (pulsadoSwitch) {
+        switch (indiceEditarAlarmas) {
+          case 0: proximoEstado = ESTADO_EDITAR_ALARMA_TEMP_MIN; break;
+          case 1: proximoEstado = ESTADO_EDITAR_ALARMA_TEMP_MAX; break;
+          case 2: proximoEstado = ESTADO_EDITAR_ALARMA_HUM_MIN; break;
+          case 3: proximoEstado = ESTADO_EDITAR_ALARMA_HUM_MAX; break;
+          case 4: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MIN; break;
+          case 5: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MAX; break;
+          case 6: guardarSetpointsEEPROM(); proximoEstado = ESTADO_ALARMAS_SUBMENU; break;
+        }
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO:
+      manejarConfirmacionModoFuncionamiento(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        if (indiceConfirmacion == 0) { // SI
+          proximoEstado = ESTADO_MODO_FUNCIONAMIENTO;
+          guardarEstadoAppEEPROM(); // Guardar el estado al entrar en modo funcionamiento
+        } else { // NO
+          proximoEstado = ESTADO_MENU_PRINCIPAL;
+        }
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_MODO_FUNCIONAMIENTO:
+      manejarModoFuncionamiento(deltaEncoder, pulsadoSwitch); // El pulsadoSwitch se maneja internamente para la confirmación
+      break;
+
+    case ESTADO_CONFIRMACION_VOLVER_MENU:
+      manejarConfirmacionVolverMenu(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        if (indiceConfirmacion == 0) { // SI
+          proximoEstado = ESTADO_MENU_PRINCIPAL;
+          guardarEstadoAppEEPROM(); // Guardar el estado al salir del modo funcionamiento
+        } else { // NO
+          proximoEstado = ESTADO_MODO_FUNCIONAMIENTO; // Volver a modo funcionamiento
+        }
+        necesitaRefrescarLCD = true;
+        initialMessageDisplayed = false; // Resetear para la próxima vez
+      }
+      break;
+
+    case ESTADO_EDITAR_TEMP:
+      manejarEditarTemperatura(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_SETPOINTS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_HUM:
+      manejarEditarHumedad(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_SETPOINTS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_CO2:
+      manejarEditarCO2(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_SETPOINTS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_TEMP_MIN:
+      manejarEditarAlarmaTempMin(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_TEMP_MAX:
+      manejarEditarAlarmaTempMax(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_HUM_MIN:
+      manejarEditarAlarmaHumMin(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_HUM_MAX:
+      manejarEditarAlarmaHumMax(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_CO2_MIN:
+      manejarEditarAlarmaCO2Min(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+
+    case ESTADO_EDITAR_ALARMA_CO2_MAX:
+      manejarEditarAlarmaCO2Max(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        guardarSetpointsEEPROM();
+        proximoEstado = ESTADO_EDITAR_ALARMAS;
+        necesitaRefrescarLCD = true;
+      }
+      break;
+    case ESTADO_ALARMA_CRITICA_AVISO:
+      manejarAlarmaCriticaAviso(deltaEncoder, pulsadoSwitch);
+      if (pulsadoSwitch) {
+        alarmaDescartada = true; // El usuario presiona para descartar la notificación visual
+        proximoEstado = lastValidState; // Sale de la pantalla de alarma
+        necesitaRefrescarLCD = true;
+        Serial.println("Alarma crítica descartada y saliendo del aviso.");
+      }
+      break;
+  }
+
+  // Transición de estados
+  if (proximoEstado != estadoActualApp) {
+    estadoActualApp = proximoEstado;
+    necesitaRefrescarLCD = true; // Asegurar que la pantalla se refresque al cambiar de estado
+    Serial.print("Cambiando a estado: ");
+    Serial.println(estadoActualApp);
+  }
 }
