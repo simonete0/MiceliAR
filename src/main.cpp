@@ -129,7 +129,6 @@ enum EstadoApp {
   ESTADO_EDITAR_ALARMAS,
   ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO,
   ESTADO_MODO_FUNCIONAMIENTO,
-  ESTADO_CONFIRMACION_VOLVER_MENU, // Nuevo estado de confirmación
   ESTADO_EDITAR_TEMP,
   ESTADO_EDITAR_HUM,
   ESTADO_EDITAR_CO2,
@@ -157,7 +156,7 @@ const int CO2_DISPLAY_THRESHOLD = 20;     // Cambio de 20 ppm (según la última
 
 unsigned long modoFuncionamientoStartTime = 0; // Para rastrear el tiempo de entrada para el mensaje inicial
 bool initialMessageDisplayed = false; // Bandera para asegurar que el mensaje inicial se muestre solo una vez
-
+bool esperandoConfirmacion = false;
 // ---------------- VARIABLES DE CONTROL DE RELÉS Y VENTILADOR ----------------
 // Histéresis para calefactor (Relay 2)
 const float HISTERESIS_TEMP_ENCENDER_CALEFACTOR = 2.0; // Encender cuando Temp <= Setpoint - 2C
@@ -195,7 +194,7 @@ unsigned long ultimoTiempoVentilacionProgramada = 0;
 const unsigned long INTERVALO_VENTILACION_PROGRAMADA = 3UL * 60 * 60 * 1000; // 3 horas en ms
 const unsigned long DURACION_VENTILACION_PROGRAMADA = 10 * 1000; // 10 segundos en ms
 bool ventilacionProgramadaActiva = false; // Bandera para indicar si la ventilación programada está en curso
-
+bool pantallaEditSetMostrada = false;
 // Nueva bandera para CO2 bajo
 bool banderaBajoCO2 = false;
 
@@ -227,7 +226,7 @@ void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch);
 
 // ETIQUETA: Prototipo de funcion para leer sensores
 void leerSensores();
-
+void leerEncoder();
 // Funciones para EEPROM
 void guardarSetpointsEEPROM();
 void cargarSetpointsEEPROM();
@@ -239,20 +238,21 @@ bool estaEnExcesoTemperatura();
 bool estaEnExcesoHumedad();
 bool estaEnExcesoCO2();
 bool estaEnDefectoCO2();
+//funcionamiento
+
 
 
 // ---------------- SETUP ----------------
 void setup() {
   Serial.begin(115200);
 
-  // ETIQUETA: Configuracion de pines de 'prueba encoder'
-  // *** Asegurar que los relés estén APAGADOS desde el inicio ***
+  // Asegura que los relés estén APAGADOS desde el inicio
   pinMode(RELAY1, OUTPUT);
   pinMode(RELAY2, OUTPUT);
   pinMode(RELAY3, OUTPUT);
   digitalWrite(RELAY1, HIGH);  // Apaga relé 1 (Ventilador) - HIGH
   digitalWrite(RELAY2, HIGH);  // Apaga relé 2 (Calefactor) - HIGH
-  digitalWrite(RELAY3, LOW);  // Apaga relé 3 (Humedad) // HIGH
+  digitalWrite(RELAY3, LOW);  // Apaga relé 3 (Humedad) - LOW
   delay(200);  // Pequeña espera para estabilización
 
   pinMode(CLOCK_ENCODER, INPUT_PULLUP);
@@ -302,13 +302,23 @@ void setup() {
 
 // ---------------- LOOP PRINCIPAL ----------------
 void loop() {
+
+static unsigned long lastEncoderCheckTime = 0;
+  if (millis() - lastEncoderCheckTime > RETARDO_ANTI_REBOTE_ENCODER) {
+    leerEncoder(); // Llama siempre, o solo si flag==true
+    lastEncoderCheckTime = millis();
+  }
+
   noInterrupts();
   int deltaEncoderActual = valorEncoder;
-  bool switchPulsadoActual = swFuePresionadoISR;
   valorEncoder = 0;
-  swFuePresionadoISR = false; // Se limpia la bandera del switch al inicio del loop
+  bool switchPulsadoActual = swFuePresionadoISR;
+  swFuePresionadoISR = false;
   interrupts();
-
+  // Si hubo movimiento de encoder, fuerza refresco inmediato
+  if (deltaEncoderActual != 0) {
+    necesitaRefrescarLCD = true;
+  }
   EstadoApp proximoEstado = estadoActualApp;
 
   switch (estadoActualApp) {
@@ -398,33 +408,12 @@ void loop() {
 
     case ESTADO_MODO_FUNCIONAMIENTO:
         // En este modo, el encoder no hace nada, solo el switch
-        if (switchPulsadoActual) {
-            proximoEstado = ESTADO_CONFIRMACION_VOLVER_MENU; // Pasa a preguntar si desea volver
-            indiceConfirmacion = 0; // Reiniciar índice a SI
-            necesitaRefrescarLCD = true; // Forzar un refresco para la nueva pantalla
-        }
         // Las actualizaciones de sensores y Firebase se manejan dentro de manejarModoFuncionamiento
         // para un control más fino. No necesitamos 'necesitaRefrescarLCD = true;' aquí
         // a menos que sea para una transición de estado, lo cual ya se maneja arriba.
         break;
 
-    case ESTADO_CONFIRMACION_VOLVER_MENU: // Nuevo caso para confirmar el regreso al menú
-        if (deltaEncoderActual != 0) {
-            indiceConfirmacion += deltaEncoderActual;
-            if (indiceConfirmacion < 0) indiceConfirmacion = TOTAL_OPCIONES_CONFIRMACION - 1;
-            if (indiceConfirmacion >= TOTAL_OPCIONES_CONFIRMACION) indiceConfirmacion = 0;
-            necesitaRefrescarLCD = true;
-        }
-        if (switchPulsadoActual) {
-            if (indiceConfirmacion == 0) { // SI
-                proximoEstado = ESTADO_MENU_PRINCIPAL;
-                guardarEstadoAppEEPROM(); // Guardar el estado de Menu Principal en EEPROM
-            } else { // NO
-                proximoEstado = ESTADO_MODO_FUNCIONAMIENTO; // Vuelve al modo de funcionamiento
-            }
-            necesitaRefrescarLCD = true;
-        }
-        break;
+    
 
     case ESTADO_EDITAR_TEMP:
     case ESTADO_EDITAR_HUM:
@@ -497,24 +486,18 @@ void loop() {
   // ETIQUETA: Lógica de transición de estado y refresco de LCD
   if (proximoEstado != estadoActualApp || necesitaRefrescarLCD) {
       if (proximoEstado != estadoActualApp) {
-          // *** Apagar relés al salir del modo funcionamiento y entrar a un menú ***
-          if (estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO && proximoEstado != ESTADO_MODO_FUNCIONAMIENTO) {
-              digitalWrite(RELAY1, HIGH); // Apagar ventilador
-              digitalWrite(RELAY2, HIGH); // Apagar calefactor
-              Serial.println("Relés APAGADOS al salir de Modo Funcionamiento.");
-          }
-
           // Lógica para reiniciar índices al cambiar de estado principal
           if (proximoEstado == ESTADO_MENU_PRINCIPAL) {
               indiceMenuPrincipal = 0;
               desplazamientoScroll = 0;
           } else if (proximoEstado == ESTADO_EDITAR_SETPOINTS) {
+              pantallaEditSetMostrada = false;
               indiceSubMenuSetpoints = 0;
               desplazamientoScroll = 0;
           } else if (proximoEstado == ESTADO_EDITAR_ALARMAS) {
               indiceEditarAlarmas = 0;
               desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO || proximoEstado == ESTADO_CONFIRMACION_VOLVER_MENU) {
+          } else if (proximoEstado == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO) {
               indiceConfirmacion = 0; // Siempre iniciar en "SI" para confirmaciones
               desplazamientoScroll = 0;
           } else if (proximoEstado == ESTADO_MODO_FUNCIONAMIENTO) {
@@ -541,8 +524,7 @@ void loop() {
                 }
 
           // Ajustes de índice al volver a MENU_PRINCIPAL desde confirmación o modo funcionamiento
-          if ((estadoActualApp == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO && proximoEstado == ESTADO_MENU_PRINCIPAL) ||
-              (estadoActualApp == ESTADO_CONFIRMACION_VOLVER_MENU && proximoEstado == ESTADO_MENU_PRINCIPAL)) {
+          if ((estadoActualApp == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO && proximoEstado == ESTADO_MENU_PRINCIPAL)) {
               indiceMenuPrincipal = 2; // Vuelve a la opción "Modo Funcionamiento"
           }
       }
@@ -558,7 +540,6 @@ void loop() {
         case ESTADO_EDITAR_ALARMAS: manejarEditarAlarmas(0, false); break;
         case ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO: manejarConfirmacionModoFuncionamiento(0, false); break;
         case ESTADO_MODO_FUNCIONAMIENTO: manejarModoFuncionamiento(0, false); break;
-        case ESTADO_CONFIRMACION_VOLVER_MENU: manejarConfirmacionVolverMenu(0, false); break;
         case ESTADO_EDITAR_ALARMA_TEMP_MIN: manejarEditarAlarmaTempMin(0, false); break;
         case ESTADO_EDITAR_ALARMA_TEMP_MAX: manejarEditarAlarmaTempMax(0, false); break;
         case ESTADO_EDITAR_ALARMA_HUM_MIN: manejarEditarAlarmaHumMin(0, false); break;
@@ -575,25 +556,20 @@ void loop() {
       manejarModoFuncionamiento(deltaEncoderActual, switchPulsadoActual);
   }
 
-  delay(10);
+  delay(2);
 }
 
 // ---------------- FUNCIONES DE INTERRUPCIÓN (ISR) ----------------
 void IRAM_ATTR leerEncoderISR() {
-  unsigned long ahora = millis();
-  if (ahora - tiempoUltimaLecturaCLK > RETARDO_ANTI_REBOTE_ENCODER) {
-    estadoClk = digitalRead(CLOCK_ENCODER);
-    estadoDt = digitalRead(DT_ENCODER);
-
-    if (estadoClk != estadoClkAnterior) {
-      if (estadoDt != estadoClk) {
-        valorEncoder++;
-      } else {
-        valorEncoder--;
-      }
+  bool clk = digitalRead(CLOCK_ENCODER);
+  bool dt = digitalRead(DT_ENCODER);
+  if (clk != estadoClkAnterior) {
+    if (dt != clk) {
+      valorEncoder++;
+    } else {
+      valorEncoder--;
     }
-    estadoClkAnterior = estadoClk;
-    tiempoUltimaLecturaCLK = ahora;
+    estadoClkAnterior = clk;
   }
 }
 
@@ -606,6 +582,18 @@ void IRAM_ATTR leerSwitchISR() {
                                     // La lógica de refresco para la salida de modo funcionamiento está en el loop principal
     }
     tiempoUltimaPresionSW = ahora;
+  }
+}
+void leerEncoder() {
+  bool clk = digitalRead(CLOCK_ENCODER);
+  bool dt = digitalRead(DT_ENCODER);
+  if (clk != estadoClkAnterior) {
+    if (dt != clk) {
+      valorEncoder++;
+    } else {
+      valorEncoder--;
+    }
+    estadoClkAnterior = clk;
   }
 }
 
@@ -667,37 +655,66 @@ void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch) {
 }
 
 void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
-  static int lastIndice = -1;
-  // Considera si necesitas desplazamientoScroll para este menú.
-  // Si TOTAL_OPCIONES_SUBMENU_SETPOINTS <= OPCIONES_VISIBLES_PANTALLA, no lo necesitas.
-  // Si sí, añade un 'static int scrollOffset = 0;' y lógica similar a manejarEditarAlarmas.
+    static int lastIndice = -1;
+   
 
-  // === 1. Procesar input del Encoder ===
-  if (deltaEncoder != 0) {
-      indiceSubMenuSetpoints += deltaEncoder;
-      // Asegurarse de que el índice esté dentro de los límites
-      if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
-      if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
-      necesitaRefrescarLCD = true; // Forzamos refresco si hay cambio de índice
-  }
- // === 2. Lógica de Refresco del LCD (solo si hay cambios) ===
-  if (necesitaRefrescarLCD || lastIndice != indiceSubMenuSetpoints) {
-    lcd.clear(); // Para este menú es simple, puedes mantener el clear() o adaptar el rellenado
-                 // Si vas a editar valores en estas líneas, lcd.clear() puede ser más sencillo.
-    for (int i = 0; i < TOTAL_OPCIONES_SUBMENU_SETPOINTS; i++) {
-      lcd.setCursor(0, i);
-      if (i == indiceSubMenuSetpoints) lcd.print(">");
-      else lcd.print(" ");
-      switch (i) {
-        case 0: lcd.print("Temp: " + String(setpointTemperatura, 1) + " C        "); break;
-        case 1: lcd.print("Hum:  " + String(setpointHumedad, 0) + " %        "); break;
-        case 2: lcd.print("CO2:  " + String(setpointCO2) + " ppm      "); break;
-        case 3: lcd.print("Guardar y salir"); break;
-      }
+    // Forzar refresco completo al entrar por primera vez
+    if (!pantallaEditSetMostrada) {
+        lcd.clear();
+        for (int i = 0; i < TOTAL_OPCIONES_SUBMENU_SETPOINTS; i++) {
+            lcd.setCursor(0, i);
+            String linea = (i == indiceSubMenuSetpoints ? ">" : " ");
+            switch (i) {
+                case 0: linea += "Temp: " + String(setpointTemperatura, 1) + " C        "; break;
+                case 1: linea += "Hum:  " + String(setpointHumedad, 0) + " %        "; break;
+                case 2: linea += "CO2:  " + String(setpointCO2) + " ppm      "; break;
+                case 3: linea += "Guardar y salir     "; break;
+            }
+            // Rellenar con espacios para limpiar la línea
+            while (linea.length() < LCD_COLUMNS) linea += " ";
+            lcd.print(linea);
+        }
+        lastIndice = indiceSubMenuSetpoints;
+        pantallaEditSetMostrada = true;
+        necesitaRefrescarLCD = false;
+        return;
     }
-    lastIndice = indiceSubMenuSetpoints;
-    necesitaRefrescarLCD = false;
-  }
+
+    // Procesar input del Encoder
+    if (deltaEncoder != 0) {
+        indiceSubMenuSetpoints += deltaEncoder;
+        if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
+        if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
+        necesitaRefrescarLCD = true;
+    }
+
+    // Solo actualizar las líneas necesarias
+    if (necesitaRefrescarLCD || lastIndice != indiceSubMenuSetpoints) {
+        // Actualiza solo la línea anterior y la nueva
+        if (lastIndice != -1 && lastIndice != indiceSubMenuSetpoints) {
+            lcd.setCursor(0, lastIndice);
+            lcd.print(" "); // Borra el ">"
+            switch (lastIndice) {
+                case 0: lcd.print("Temp: " + String(setpointTemperatura, 1) + " C"); break;
+                case 1: lcd.print("Hum:  " + String(setpointHumedad, 0) + " %"); break;
+                case 2: lcd.print("CO2:  " + String(setpointCO2) + " ppm"); break;
+                case 3: lcd.print("Guardar y salir"); break;
+            }
+        }
+        // Dibuja la línea seleccionada con ">"
+        lcd.setCursor(0, indiceSubMenuSetpoints);
+        lcd.print(">");
+        switch (indiceSubMenuSetpoints) {
+            case 0: lcd.print("Temp: " + String(setpointTemperatura, 1) + " C        "); break;
+            case 1: lcd.print("Hum:  " + String(setpointHumedad, 0) + " %        "); break;
+            case 2: lcd.print("CO2:  " + String(setpointCO2) + " ppm      "); break;
+            case 3: lcd.print("Guardar y salir     "); break;
+        }
+        lastIndice = indiceSubMenuSetpoints;
+        necesitaRefrescarLCD = false;
+    }
+
+    // Si cambias de estado, recuerda resetear pantallaMostrada = false;
 }
 
 
@@ -755,21 +772,7 @@ void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch)
     }
 }
 
-void manejarConfirmacionVolverMenu(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.clear();
-  lcd.home();
-  lcd.print("Volver al Menu?");
-  lcd.setCursor(0, 1);
-  lcd.print("                    ");
 
-    String opcionesConfirmacion[] = {"SI", "NO"};
-
-    for (int i = 0; i < TOTAL_OPCIONES_CONFIRMACION; i++) {
-        String linea = (i == indiceConfirmacion ? "> " : "  ") + opcionesConfirmacion[i];
-        lcd.setCursor(0, 2 + i);
-        lcd.print(linea);
-    }
-}
 
 // ETIQUETA: Implementacion de la funcion para leer sensores
 void leerSensores() {
@@ -805,8 +808,11 @@ void leerSensores() {
 
 // ETIQUETA: Implementacion de manejarModoFuncionamiento
 void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
-    unsigned long currentMillis = millis();
-
+static bool mensajeMostrado = false;
+static int indiceConfirmacionLocal = 0; // 0 = SI, 1 = NO
+static int lastIndiceConfirmacion = -1;
+static bool pantallaConfirmacionMostrada = false;
+unsigned long currentMillis = millis();
     // Mostrar mensaje inicial por 3 segundos
     if (!initialMessageDisplayed) {
         lcd.clear();
@@ -818,25 +824,79 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
         initialMessageDisplayed = true;
     }
 
-    // Si todavía estamos dentro del tiempo del mensaje inicial, no hacemos nada más
+    // Esperar 3 segundos antes de mostrar datos y permitir interacción
     if (currentMillis - modoFuncionamientoStartTime < 3000) {
         return;
+    }
+
+    // Si estamos esperando confirmación de salida
+    if (esperandoConfirmacion) {
+      //solo refrescar si el LCD cambia la opvion o es la primera vez
+      if (!pantallaConfirmacionMostrada||lastIndiceConfirmacion != indiceConfirmacionLocal) {
+          lcd.clear();
+          lcd.home();
+          lcd.print("Salir de M. Funcion?");
+          lcd.setCursor(0, 2);
+          lcd.print((indiceConfirmacionLocal == 0 ? "> SI" : "  SI"));
+          lcd.setCursor(0, 3);
+          lcd.print((indiceConfirmacionLocal == 1 ? "> NO" : "  NO"));
+          pantallaConfirmacionMostrada = true;
+          lastIndiceConfirmacion = indiceConfirmacionLocal;
+        }
+        // Manejar input del encoder para cambiar opción
+        if (deltaEncoder != 0) {
+            indiceConfirmacionLocal += deltaEncoder;
+            if (indiceConfirmacionLocal < 0) indiceConfirmacionLocal = 1;
+            if (indiceConfirmacionLocal > 1) indiceConfirmacionLocal = 0;
+            pantallaConfirmacionMostrada = false; // Forzar refresco en el próximo ciclo
+        }
+
+        // Si se pulsa el switch, actuar según la opción
+        if (pulsadoSwitch) {
+            if (indiceConfirmacionLocal == 0) {
+                // Confirmó salir: apagar actuadores y cambiar de estado
+                digitalWrite(RELAY1, HIGH); // Apagar ventilador
+                digitalWrite(RELAY2, HIGH); // Apagar calefactor
+                digitalWrite(RELAY3, LOW);  // Apagar humidificador
+                estadoActualApp = ESTADO_MENU_PRINCIPAL;
+                guardarEstadoAppEEPROM();
+                necesitaRefrescarLCD = true;
+            }
+            // Si elige NO, solo sale de la confirmación
+            esperandoConfirmacion = false;
+            indiceConfirmacionLocal = 0;
+            pantallaConfirmacionMostrada = false; // Reset para la próxima vez
+            lastIndiceConfirmacion = -1;
+            mensajeMostrado = false;
+            // Forzar refresco de todas las líneas de sensores
+            lastDisplayedTemp = -999.0;
+            lastDisplayedHum = -999.0;
+            lastDisplayedCO2 = -999.0;
+            return;
+        }
+        return; // No ejecutar el resto de la función mientras se confirma
     }
 
     // Leer sensores
     leerSensores();
 
+    // Al pulsar el switch, pedir confirmación (pero NO apagar actuadores aquí)
+    if (pulsadoSwitch) {
+         esperandoConfirmacion = true;
+        indiceConfirmacionLocal = 0;
+        pantallaConfirmacionMostrada = false; // Forzar refresco al entrar
+        lastIndiceConfirmacion = -1;
+        return;
+    }
+
     // --- Control del Calefactor (Relé 2 - D0) ---
-    // Enciende si la temperatura cae por debajo del setpoint - 2°C
     if (currentTemp <= setpointTemperatura - HISTERESIS_TEMP_ENCENDER_CALEFACTOR) {
         digitalWrite(RELAY2, LOW); // Enciende el calefactor
-    }
-    // Apaga si la temperatura sube por encima del setpoint + 1.5°C
-    else if (currentTemp >= setpointTemperatura + HISTERESIS_TEMP_APAGAR_CALEFACTOR) {
+    } else if (currentTemp >= setpointTemperatura + HISTERESIS_TEMP_APAGAR_CALEFACTOR) {
         digitalWrite(RELAY2, HIGH); // Apaga el calefactor
     }
-    // --- Control del Humedificador (Relé 3 - D1) ---
-    // Enciende si la humedad cae por debajo del setpoint - 5%
+
+    // --- Control del Humidificador (Relé 3 - D1) ---
     if (currentHum <= setpointHumedad - HISTERESIS_HUM_ENCENDER_HUMIDIFICADOR) {
         digitalWrite(RELAY3, HIGH); // Enciende el humidificador
     } else if (currentHum >= setpointHumedad + HISTERESIS_HUM_APAGAR_HUMIDIFICADOR) {
@@ -844,10 +904,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
     }
 
     // --- Control del Ventilador (Relé 1 - D8) ---
-
     // Lógica para la ventilación programada de CO2
-    // PRIORIDAD: Solo activar ventilación programada si el ventilador está inactivo
-    // y no hay condiciones de exceso activando el ventilador por umbrales.
     if (!ventilacionProgramadaActiva &&
         (currentMillis - ultimoTiempoVentilacionProgramada >= INTERVALO_VENTILACION_PROGRAMADA) &&
         (estadoVentiladorActual == VENTILADOR_INACTIVO) &&
@@ -855,7 +912,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
     {
         ventilacionProgramadaActiva = true;
         digitalWrite(RELAY1, LOW); // Enciende el ventilador para pulso programado
-        temporizadorActivoVentilador = currentMillis; // Reiniciar temporizador del ventilador para la duración programada
+        temporizadorActivoVentilador = currentMillis;
         Serial.println("Ventilación programada de CO2 iniciada.");
     }
 
@@ -863,40 +920,36 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
         if (currentMillis - temporizadorActivoVentilador >= DURACION_VENTILACION_PROGRAMADA) {
             digitalWrite(RELAY1, HIGH); // Apaga el ventilador
             ventilacionProgramadaActiva = false;
-            ultimoTiempoVentilacionProgramada = currentMillis; // Actualizar el tiempo de la última ventilación
+            ultimoTiempoVentilacionProgramada = currentMillis;
             Serial.println("Ventilación programada de CO2 finalizada.");
         }
-        // Mientras la ventilación programada está activa, la lógica de histeresis del ventilador se pausará.
-        // Después de que la ventilación programada finalice, el sistema volverá a evaluar las condiciones por umbral.
     } else {
-        // Lógica de control por histeresis (solo si no hay ventilación programada activa)
         switch (estadoVentiladorActual) {
             case VENTILADOR_INACTIVO:
-                // Verificar si alguna condición de activación se cumple
                 if (estaEnExcesoTemperatura()) {
                     razonActivacionVentilador = TEMPERATURA_ALTA;
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
                     temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
+                    digitalWrite(RELAY1, LOW);
                     Serial.println("Ventilador ON (Temp alta)");
                 } else if (estaEnExcesoHumedad()) {
                     razonActivacionVentilador = HUMEDAD_ALTA;
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
                     temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
+                    digitalWrite(RELAY1, LOW);
                     Serial.println("Ventilador ON (Humedad alta)");
                 } else if (estaEnExcesoCO2()) {
                     razonActivacionVentilador = CO2_ALTO;
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
                     temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador
+                    digitalWrite(RELAY1, LOW);
                     Serial.println("Ventilador ON (CO2 alto)");
                 }
                 break;
 
             case VENTILADOR_ENCENDIDO_3S:
-                if (currentMillis - temporizadorActivoVentilador >= 3000) { // 3 segundos
-                    digitalWrite(RELAY1, HIGH); // Apaga el ventilador
+                if (currentMillis - temporizadorActivoVentilador >= 3000) {
+                    digitalWrite(RELAY1, HIGH);
                     estadoVentiladorActual = VENTILADOR_APAGADO_5S;
                     temporizadorActivoVentilador = currentMillis;
                     Serial.println("Ventilador OFF (después de 3s)");
@@ -904,17 +957,17 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
                 break;
 
             case VENTILADOR_APAGADO_5S:
-                if (currentMillis - temporizadorActivoVentilador >= 5000) { // 5 segundos
-                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S; // Pasar al siguiente pulso
+                if (currentMillis - temporizadorActivoVentilador >= 5000) {
+                    estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S;
                     temporizadorActivoVentilador = currentMillis;
-                    digitalWrite(RELAY1, LOW); // Enciende el ventilador de nuevo
+                    digitalWrite(RELAY1, LOW);
                     Serial.println("Ventilador ON (pulso de 5s)");
                 }
                 break;
 
             case VENTILADOR_ENCENDIDO_5S:
-                if (currentMillis - temporizadorActivoVentilador >= 5000) { // 5 segundos
-                    digitalWrite(RELAY1, HIGH); // Apaga el ventilador
+                if (currentMillis - temporizadorActivoVentilador >= 5000) {
+                    digitalWrite(RELAY1, HIGH);
                     estadoVentiladorActual = VENTILADOR_ESPERA_ESTABILIZACION;
                     temporizadorActivoVentilador = currentMillis;
                     Serial.println("Ventilador OFF (después de 5s)");
@@ -922,8 +975,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
                 break;
 
             case VENTILADOR_ESPERA_ESTABILIZACION:
-                if (currentMillis - temporizadorActivoVentilador >= 15000) { // 15 segundos
-                    // Evaluar si las condiciones han mejorado
+                if (currentMillis - temporizadorActivoVentilador >= 15000) {
                     bool condicionesMejoraron = false;
                     switch (razonActivacionVentilador) {
                         case TEMPERATURA_ALTA:
@@ -941,19 +993,19 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
                                 condicionesMejoraron = true;
                             }
                             break;
-                        case NINGUNA: // No debería llegar aquí si el ventilador está activo
+                        case NINGUNA:
                             condicionesMejoraron = true;
                             break;
                     }
 
                     if (condicionesMejoraron) {
-                        estadoVentiladorActual = VENTILADOR_INACTIVO; // Vuelve a inactivo, condiciones mejoraron
+                        estadoVentiladorActual = VENTILADOR_INACTIVO;
                         razonActivacionVentilador = NINGUNA;
                         Serial.println("Ventilador IDLE (condiciones mejoraron)");
                     } else {
-                        estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S; // Repite el ciclo de 5s, condiciones no mejoraron
+                        estadoVentiladorActual = VENTILADOR_ENCENDIDO_5S;
                         temporizadorActivoVentilador = currentMillis;
-                        digitalWrite(RELAY1, LOW); // Enciende el ventilador de nuevo
+                        digitalWrite(RELAY1, LOW);
                         Serial.println("Ventilador ON (reinicio ciclo, condiciones no mejoraron)");
                     }
                 }
@@ -961,8 +1013,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
         }
     }
 
-
-     // --- Actualización selectiva del LCD ---
+    // --- Actualización selectiva del LCD ---
     // Línea 0: Temperatura
     if (abs(currentTemp - lastDisplayedTemp) > TEMP_DISPLAY_THRESHOLD || lastDisplayedTemp == -999.0) {
         lastDisplayedTemp = currentTemp;
@@ -988,7 +1039,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
         lcd.print(linea);
     }
     // Línea 3: Mensaje fijo
-    static bool mensajeMostrado = false;
+
     if (!mensajeMostrado) {
         lcd.setCursor(0, 3);
         String linea = "Pulsar para ir a Menu";
@@ -997,7 +1048,7 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
         mensajeMostrado = true;
     }
 
-    // Envío de datos a Firebase (igual que antes)
+    // Envío de datos a Firebase
     if(firebase.sendData(currentTemp, currentHum, currentCO2)) {
         Serial.println("Datos enviados a Firebase");
     } else {
