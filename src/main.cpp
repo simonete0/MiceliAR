@@ -126,8 +126,6 @@ const int OPCIONES_VISIBLES_PANTALLA = 4;
 enum EstadoApp {
   ESTADO_MENU_PRINCIPAL,
   ESTADO_EDITAR_SETPOINTS,
-  ESTADO_ALARMAS_SUBMENU,
-  ESTADO_MOSTRAR_ALARMAS,
   ESTADO_EDITAR_ALARMAS,
   ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO,
   ESTADO_MODO_FUNCIONAMIENTO,
@@ -212,8 +210,6 @@ void IRAM_ATTR leerSwitchISR();
 
 void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch);
 void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch);
-void manejarSubMenuAlarmas(int deltaEncoder, bool pulsadoSwitch);
-void manejarMostrarAlarmas(int deltaEncoder, bool pulsadoSwitch);
 void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch);
 void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch);
 void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch);
@@ -326,7 +322,7 @@ void loop() {
       if (switchPulsadoActual) {
         switch (indiceMenuPrincipal) {
           case 0: proximoEstado = ESTADO_EDITAR_SETPOINTS; break;
-          case 1: proximoEstado = ESTADO_ALARMAS_SUBMENU; break;
+          case 1: proximoEstado = ESTADO_EDITAR_ALARMAS; break;
           case 2:
               proximoEstado = ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO;
               indiceConfirmacion = 0; // Reiniciar índice a SI
@@ -357,26 +353,7 @@ void loop() {
       }
       break;
 
-    case ESTADO_ALARMAS_SUBMENU:
-      if (deltaEncoderActual != 0) {
-        indiceSubMenuAlarmas += deltaEncoderActual;
-        if (indiceSubMenuAlarmas < 0) indiceSubMenuAlarmas = TOTAL_OPCIONES_SUBMENU_ALARMAS - 1;
-        if (indiceSubMenuAlarmas >= TOTAL_OPCIONES_SUBMENU_ALARMAS) indiceSubMenuAlarmas = 0;
-        necesitaRefrescarLCD = true;
-      }
-      if (switchPulsadoActual) {
-        switch (indiceSubMenuAlarmas) {
-          case 0: proximoEstado = ESTADO_MOSTRAR_ALARMAS; break;
-          case 1:
-              proximoEstado = ESTADO_EDITAR_ALARMAS;
-              indiceEditarAlarmas = 0;
-              break;
-          case 2: proximoEstado = ESTADO_MENU_PRINCIPAL; break;
-        }
-        necesitaRefrescarLCD = true;
-      }
-      break;
-
+    
     case ESTADO_EDITAR_ALARMAS:
       if (deltaEncoderActual != 0) {
         indiceEditarAlarmas += deltaEncoderActual;
@@ -394,7 +371,7 @@ void loop() {
           case 5: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MAX; break;
           case 6:
               guardarSetpointsEEPROM();
-              proximoEstado = ESTADO_ALARMAS_SUBMENU;
+              proximoEstado = ESTADO_MENU_PRINCIPAL;
               break;
         }
         necesitaRefrescarLCD = true;
@@ -514,12 +491,7 @@ void loop() {
       }
       break;
 
-    case ESTADO_MOSTRAR_ALARMAS:
-      if (switchPulsadoActual) {
-        proximoEstado = ESTADO_ALARMAS_SUBMENU;
-        necesitaRefrescarLCD = true;
-      }
-      break;
+
   }
 
   // ETIQUETA: Lógica de transición de estado y refresco de LCD
@@ -538,9 +510,6 @@ void loop() {
               desplazamientoScroll = 0;
           } else if (proximoEstado == ESTADO_EDITAR_SETPOINTS) {
               indiceSubMenuSetpoints = 0;
-              desplazamientoScroll = 0;
-          } else if (proximoEstado == ESTADO_ALARMAS_SUBMENU) {
-              indiceSubMenuAlarmas = 0;
               desplazamientoScroll = 0;
           } else if (proximoEstado == ESTADO_EDITAR_ALARMAS) {
               indiceEditarAlarmas = 0;
@@ -564,8 +533,6 @@ void loop() {
           if (estadoActualApp == ESTADO_EDITAR_HUM && proximoEstado == ESTADO_EDITAR_SETPOINTS) indiceSubMenuSetpoints = 1;
           if (estadoActualApp == ESTADO_EDITAR_CO2 && proximoEstado == ESTADO_EDITAR_SETPOINTS) indiceSubMenuSetpoints = 2;
 
-          if (estadoActualApp == ESTADO_MOSTRAR_ALARMAS && proximoEstado == ESTADO_ALARMAS_SUBMENU) indiceSubMenuAlarmas = 0;
-
           if ( (estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_TEMP_MAX ||
                 estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_HUM_MAX ||
                 estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MIN || estadoActualApp == ESTADO_EDITAR_ALARMA_CO2_MAX) &&
@@ -585,11 +552,9 @@ void loop() {
       switch (estadoActualApp) {
         case ESTADO_MENU_PRINCIPAL: manejarMenuPrincipal(0, false); break;
         case ESTADO_EDITAR_SETPOINTS: manejarEditarSetpoints(0, false); break;
-        case ESTADO_ALARMAS_SUBMENU: manejarSubMenuAlarmas(0, false); break;
         case ESTADO_EDITAR_TEMP: manejarEditarTemperatura(0, false); break;
         case ESTADO_EDITAR_HUM: manejarEditarHumedad(0, false); break;
         case ESTADO_EDITAR_CO2: manejarEditarCO2(0, false); break;
-        case ESTADO_MOSTRAR_ALARMAS: manejarMostrarAlarmas(0, false); break;
         case ESTADO_EDITAR_ALARMAS: manejarEditarAlarmas(0, false); break;
         case ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO: manejarConfirmacionModoFuncionamiento(0, false); break;
         case ESTADO_MODO_FUNCIONAMIENTO: manejarModoFuncionamiento(0, false); break;
@@ -652,110 +617,90 @@ void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch) {
   } else if (indiceMenuPrincipal >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
       desplazamientoScroll = indiceMenuPrincipal - OPCIONES_VISIBLES_PANTALLA + 1;
   }
-
-  String opcionesMenuPrincipal[] = {
-    "Setpoints",
-    "Alarmas",
-    "Modo Funcionamiento"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_MENU_PRINCIPAL) {
-      String textoOpcion = opcionesMenuPrincipal[indiceOpcion];
-      String lineaMostrada = (indiceOpcion == indiceMenuPrincipal ? "> " : "  ") + textoOpcion;
-
-      int len = lineaMostrada.length();
-      if (len > LCD_COLUMNS) {
-          lineaMostrada = lineaMostrada.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              lineaMostrada += " ";
-          }
-      }
-      lcd.setCursor(0, i);
-      // Asegurarse de que la línea no exceda el ancho del LCD
-      lcd.print(lineaMostrada);
-    } else {
-      lcd.setCursor(0, i);
-      lcd.print("                    ");
-    }
+  static int lastIndiceMenuPrincipal = -1;
+  static int lastDesplazamientoScroll = -1;
+ 
+// === 1. Procesar input del Encoder ===
+  if (deltaEncoder != 0) {
+    indiceMenuPrincipal += deltaEncoder;
+    // Asegura de que el índice esté dentro de los límites
+    if (indiceMenuPrincipal < 0) indiceMenuPrincipal = TOTAL_OPCIONES_MENU_PRINCIPAL - 1;
+    if (indiceMenuPrincipal >= TOTAL_OPCIONES_MENU_PRINCIPAL) indiceMenuPrincipal = 0;
+    necesitaRefrescarLCD = true; // Forzamos refresco si hay cambio de índice
   }
+  // === 2. Lógica de Scroll ===
+  // Solo aplicar scroll si el número de opciones excede las líneas visibles
+  if (TOTAL_OPCIONES_MENU_PRINCIPAL > OPCIONES_VISIBLES_PANTALLA) {
+      if (indiceMenuPrincipal < desplazamientoScroll) {
+          desplazamientoScroll = indiceMenuPrincipal;
+      } else if (indiceMenuPrincipal >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
+          desplazamientoScroll = indiceMenuPrincipal - OPCIONES_VISIBLES_PANTALLA + 1;
+      }
+  }
+  // === 3. Lógica de Refresco del LCD solo si hay cambios ===
+  if (necesitaRefrescarLCD || lastIndiceMenuPrincipal != indiceMenuPrincipal || lastDesplazamientoScroll != desplazamientoScroll) {
+    for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
+      int indiceOpcion = desplazamientoScroll + i;
+      lcd.setCursor(0, i); // Mover el cursor a la línea i
+
+      if (indiceOpcion < TOTAL_OPCIONES_MENU_PRINCIPAL) {
+        String textoOpcion = opcionesMenuPrincipal[indiceOpcion];
+        String lineaMostrada = (indiceOpcion == indiceMenuPrincipal ? "> " : "  ") + textoOpcion;
+
+        // Rellenar con espacios para borrar el contenido anterior de la línea
+        int len = lineaMostrada.length();
+        for(int k=0; k < (LCD_COLUMNS - len); k++) {
+            lineaMostrada += " ";
+        }
+        lcd.print(lineaMostrada);
+      } else {
+        // Limpiar líneas vacías si el menú es más corto que las OPCIONES_VISIBLES_PANTALLA
+        lcd.print("                    "); // Rellenar con espacios
+      }
+    }
+    // Actualizar los estados estáticos para la próxima comparación
+    lastIndiceMenuPrincipal = indiceMenuPrincipal;
+    lastDesplazamientoScroll = desplazamientoScroll;
+    necesitaRefrescarLCD = false; // El display ha sido refrescado
+  }
+ 
 }
 
 void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceSubMenuSetpoints < desplazamientoScroll) {
-      desplazamientoScroll = indiceSubMenuSetpoints;
-  } else if (indiceSubMenuSetpoints >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceSubMenuSetpoints - OPCIONES_VISIBLES_PANTALLA + 1;
+  static int lastIndice = -1;
+  // Considera si necesitas desplazamientoScroll para este menú.
+  // Si TOTAL_OPCIONES_SUBMENU_SETPOINTS <= OPCIONES_VISIBLES_PANTALLA, no lo necesitas.
+  // Si sí, añade un 'static int scrollOffset = 0;' y lógica similar a manejarEditarAlarmas.
+
+  // === 1. Procesar input del Encoder ===
+  if (deltaEncoder != 0) {
+      indiceSubMenuSetpoints += deltaEncoder;
+      // Asegurarse de que el índice esté dentro de los límites
+      if (indiceSubMenuSetpoints < 0) indiceSubMenuSetpoints = TOTAL_OPCIONES_SUBMENU_SETPOINTS - 1;
+      if (indiceSubMenuSetpoints >= TOTAL_OPCIONES_SUBMENU_SETPOINTS) indiceSubMenuSetpoints = 0;
+      necesitaRefrescarLCD = true; // Forzamos refresco si hay cambio de índice
   }
-
-  String opcionesSubMenuSetpoints[] = {
-    "T: " + String(setpointTemperatura, 1) + " C",
-    "H: " + String(setpointHumedad, 0) + " %",
-    "CO2: " + String(setpointCO2) + " ppm",
-    "Guardar y Volver"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_SUBMENU_SETPOINTS) {
-      String linea = (indiceOpcion == indiceSubMenuSetpoints ? "> " : "  ") + opcionesSubMenuSetpoints[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
+ // === 2. Lógica de Refresco del LCD (solo si hay cambios) ===
+  if (necesitaRefrescarLCD || lastIndice != indiceSubMenuSetpoints) {
+    lcd.clear(); // Para este menú es simple, puedes mantener el clear() o adaptar el rellenado
+                 // Si vas a editar valores en estas líneas, lcd.clear() puede ser más sencillo.
+    for (int i = 0; i < TOTAL_OPCIONES_SUBMENU_SETPOINTS; i++) {
+      lcd.setCursor(0, i);
+      if (i == indiceSubMenuSetpoints) lcd.print(">");
+      else lcd.print(" ");
+      switch (i) {
+        case 0: lcd.print("Temp: " + String(setpointTemperatura, 1) + " C        "); break;
+        case 1: lcd.print("Hum:  " + String(setpointHumedad, 0) + " %        "); break;
+        case 2: lcd.print("CO2:  " + String(setpointCO2) + " ppm      "); break;
+        case 3: lcd.print("Guardar y salir"); break;
       }
-      lcd.setCursor(0, i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0, i);
-      lcd.print("                    ");
     }
+    lastIndice = indiceSubMenuSetpoints;
+    necesitaRefrescarLCD = false;
   }
 }
 
-void manejarSubMenuAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceSubMenuAlarmas < desplazamientoScroll) {
-      desplazamientoScroll = indiceSubMenuAlarmas;
-  } else if (indiceSubMenuAlarmas >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceSubMenuAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
 
-  String opcionesSubMenuAlarmas[] = {  //------------------------------------------------------------------------------------
-    "Mostrar Alarmas",
-    "Editar Alarmas",
-    "Volver al Menu"
-  };
-
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-
-    if (indiceOpcion < TOTAL_OPCIONES_SUBMENU_ALARMAS) {
-      String linea = (indiceOpcion == indiceSubMenuAlarmas ? "> " : "  ") + opcionesSubMenuAlarmas[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
-      }
-      lcd.setCursor(0, i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0, i);
-      lcd.print("                    ");
-    }
-  }
-}
 
 void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
   if (indiceEditarAlarmas < desplazamientoScroll) {
@@ -764,49 +709,34 @@ void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
       desplazamientoScroll = indiceEditarAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
   }
 
-  String opcionesEditarAlarmas[] = {
-    "T Min: " + String(alarmaTempMin, 1) + " C         ",
-    "T Max: " + String(alarmaTempMax, 1) + " C         ",
-    "H Min: " + String(alarmaHumMin, 0) + " %         ",
-    "H Max: " + String(alarmaHumMax, 0) + " %         ",
-    "CO2 Min: " + String(alarmaCO2Min) + " ppm      ",
-    "CO2 Max: " + String(alarmaCO2Max) + " ppm      ",
-    "Guardar y Volver"
-  };
-
   for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
     int indiceOpcion = desplazamientoScroll + i;
+    String linea;
 
-    if (indiceOpcion < TOTAL_OPCIONES_EDITAR_ALARMAS) {
-      String linea = (indiceOpcion == indiceEditarAlarmas ? "> " : "  ") + opcionesEditarAlarmas[indiceOpcion];
-
-      int len = linea.length();
-      if (len > LCD_COLUMNS) {
-          linea = linea.substring(0, LCD_COLUMNS);
-      } else {
-          for(int k=0; k < (LCD_COLUMNS - len); k++) {
-              linea += " ";
-          }
-      }
-      lcd.setCursor(0, i);
-      lcd.print(linea);
-    } else {
-      lcd.setCursor(0, i);
-      lcd.print("                    ");
+    switch (indiceOpcion) {
+      case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
+      case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
+      case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
+      case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
+      case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
+      case 5: linea = "CO2 Max: " + String(alarmaCO2Max) + " ppm "; break;
+      case 6: linea = "Guardar y Volver "; break;
+      default: linea = ""; break;
     }
-  }
-}
 
-void manejarMostrarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.clear();
-  lcd.home();
-  lcd.print("Mostrar Alarmas     ");
-  lcd.setCursor(0, 1);
-  lcd.print("T Min:" + String(alarmaTempMin, 1) + " Max:" + String(alarmaTempMax, 1));
-  lcd.setCursor(0, 2);
-  lcd.print("H Min:" + String(alarmaHumMin, 0) + " Max:" + String(alarmaHumMax, 0));
-  lcd.setCursor(0, 3);
-  lcd.print("CO2 Min:" + String(alarmaCO2Min) + " Max:" + String(alarmaCO2Max));
+    // Agrega el selector
+    if (indiceOpcion == indiceEditarAlarmas) {
+      linea = "> " + linea;
+    } else {
+      linea = "  " + linea;
+    }
+
+    // Rellenar con espacios para limpiar la línea
+    while (linea.length() < LCD_COLUMNS) linea += " ";
+
+    lcd.setCursor(0, i);
+    lcd.print(linea);
+  }
 }
 
 void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
@@ -1032,34 +962,42 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
     }
 
 
-    // Comprobar cambios y actualizar LCD
-    bool changed = false;
+     // --- Actualización selectiva del LCD ---
+    // Línea 0: Temperatura
     if (abs(currentTemp - lastDisplayedTemp) > TEMP_DISPLAY_THRESHOLD || lastDisplayedTemp == -999.0) {
         lastDisplayedTemp = currentTemp;
-        changed = true;
+        lcd.setCursor(0, 0);
+        String linea = "T: " + String(lastDisplayedTemp, 1) + " C        ";
+        while (linea.length() < LCD_COLUMNS) linea += " ";
+        lcd.print(linea);
     }
+    // Línea 1: Humedad
     if (abs(currentHum - lastDisplayedHum) > HUM_DISPLAY_THRESHOLD || lastDisplayedHum == -999.0) {
         lastDisplayedHum = currentHum;
-        changed = true;
+        lcd.setCursor(0, 1);
+        String linea = "H: " + String(lastDisplayedHum, 0) + " %        ";
+        while (linea.length() < LCD_COLUMNS) linea += " ";
+        lcd.print(linea);
     }
+    // Línea 2: CO2
     if (abs(currentCO2 - lastDisplayedCO2) > CO2_DISPLAY_THRESHOLD || lastDisplayedCO2 == -999.0) {
         lastDisplayedCO2 = currentCO2;
-        changed = true;
-    }
-
-    if (changed) {
-        lcd.clear(); // Limpiar solo cuando hay nuevos datos para imprimir
-        lcd.home();
-        lcd.print("T: " + String(lastDisplayedTemp, 1) + " C        "); // Asegurarse de que el mensaje ocupe todo el ancho
-        lcd.setCursor(0, 1);
-        lcd.print("H: " + String(lastDisplayedHum, 0) + " %        ");
         lcd.setCursor(0, 2);
-        lcd.print("CO2: " + String((int)lastDisplayedCO2) + " ppm      ");
+        String linea = "CO2: " + String((int)lastDisplayedCO2) + " ppm      ";
+        while (linea.length() < LCD_COLUMNS) linea += " ";
+        lcd.print(linea);
+    }
+    // Línea 3: Mensaje fijo
+    static bool mensajeMostrado = false;
+    if (!mensajeMostrado) {
         lcd.setCursor(0, 3);
-        lcd.print("Pulsar para ir a Menu"); // Mantener el mensaje para salir
+        String linea = "Pulsar para ir a Menu";
+        while (linea.length() < LCD_COLUMNS) linea += " ";
+        lcd.print(linea);
+        mensajeMostrado = true;
     }
 
-    // Envío de datos de sensores a Firebase (se basa en la lógica interna de sendData para cambios significativos)
+    // Envío de datos a Firebase (igual que antes)
     if(firebase.sendData(currentTemp, currentHum, currentCO2)) {
         Serial.println("Datos enviados a Firebase");
     } else {
