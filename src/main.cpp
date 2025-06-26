@@ -164,6 +164,8 @@ bool initialMessageDisplayed = false; // Bandera para asegurar que el mensaje in
 // Histéresis para calefactor (Relay 2)
 const float HISTERESIS_TEMP_ENCENDER_CALEFACTOR = 2.0; // Encender cuando Temp <= Setpoint - 2C
 const float HISTERESIS_TEMP_APAGAR_CALEFACTOR = 1.5;   // Apagar cuando Temp >= Setpoint + 1.5C
+const float HISTERESIS_HUM_ENCENDER_HUMIDIFICADOR = 5.0; // Encender cuando Hum <= Setpoint - 5%
+const float HISTERESIS_HUM_APAGAR_HUMIDIFICADOR = 2.0;   // Apagar cuando Hum >= Setpoint + 2%
 
 // Umbrales de activación para ventilador (Relay 1)
 const float UMBRAL_TEMP_VENTILADOR = 2.0; // Encender si Temp > Setpoint + 2C
@@ -252,10 +254,10 @@ void setup() {
   pinMode(RELAY1, OUTPUT);
   pinMode(RELAY2, OUTPUT);
   pinMode(RELAY3, OUTPUT);
-  digitalWrite(RELAY3, HIGH);  // Apaga relé 3 (Hum
   digitalWrite(RELAY1, HIGH);  // Apaga relé 1 (Ventilador) - HIGH
   digitalWrite(RELAY2, HIGH);  // Apaga relé 2 (Calefactor) - HIGH
-  delay(100);  // Pequeña espera para estabilización
+  digitalWrite(RELAY3, LOW);  // Apaga relé 3 (Humedad) // HIGH
+  delay(200);  // Pequeña espera para estabilización
 
   pinMode(CLOCK_ENCODER, INPUT_PULLUP);
   pinMode(DT_ENCODER, INPUT_PULLUP);
@@ -265,13 +267,6 @@ void setup() {
   attachInterrupt(digitalPinToInterrupt(SW_ENCODER), leerSwitchISR, FALLING);
 
   estadoClkAnterior = digitalRead(CLOCK_ENCODER);
-
-  Wire.begin(I2C_SDA, I2C_SCL);
-  lcd.init();
-  delay(100);
-  lcd.backlight(); // Asegurar que la luz de fondo esté encendida
-  lcd.clear();
-
 
   cargarSetpointsEEPROM();
   cargarEstadoAppEEPROM(); // Cargar el último estado de la aplicación
@@ -301,6 +296,12 @@ void setup() {
 
   // Inicializar el tiempo de la última ventilación programada
   ultimoTiempoVentilacionProgramada = millis();
+  
+  Wire.begin(I2C_SDA, I2C_SCL);
+  lcd.init();
+  delay(1000);
+  lcd.backlight(); // Asegurar que la luz de fondo esté encendida
+  lcd.clear();
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -903,6 +904,13 @@ void manejarModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
     // Apaga si la temperatura sube por encima del setpoint + 1.5°C
     else if (currentTemp >= setpointTemperatura + HISTERESIS_TEMP_APAGAR_CALEFACTOR) {
         digitalWrite(RELAY2, HIGH); // Apaga el calefactor
+    }
+    // --- Control del Humedificador (Relé 3 - D1) ---
+    // Enciende si la humedad cae por debajo del setpoint - 5%
+    if (currentHum <= setpointHumedad - HISTERESIS_HUM_ENCENDER_HUMIDIFICADOR) {
+        digitalWrite(RELAY3, HIGH); // Enciende el humidificador
+    } else if (currentHum >= setpointHumedad + HISTERESIS_HUM_APAGAR_HUMIDIFICADOR) {
+        digitalWrite(RELAY3, LOW); // Apaga el humidificador
     }
 
     // --- Control del Ventilador (Relé 1 - D8) ---
