@@ -633,7 +633,7 @@ void manejarMenuPrincipal(int deltaEncoder, bool pulsadoSwitch) {
 
       if (indiceOpcion < TOTAL_OPCIONES_MENU_PRINCIPAL) {
         String textoOpcion = opcionesMenuPrincipal[indiceOpcion];
-        String lineaMostrada = (indiceOpcion == indiceMenuPrincipal ? "> " : "  ") + textoOpcion;
+        String lineaMostrada = (indiceOpcion == indiceMenuPrincipal ? ">" : " ") + textoOpcion;
 
         // Rellenar con espacios para borrar el contenido anterior de la línea
         int len = lineaMostrada.length();
