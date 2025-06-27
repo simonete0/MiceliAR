@@ -85,7 +85,8 @@ float alarmaHumMin = 50.0;
 float alarmaHumMax = 90.0;
 int alarmaCO2Min = 600; // Estos valores deben ser revisados para la incubación
 int alarmaCO2Max = 1200; // Estos valores deben ser revisados para la incubación
-
+unsigned long tiempoAlternarPantalla = 0;
+bool mostrandoAlarmas = false;
 // Rangos de edición y pasos (Setpoints)
 const float TEMP_MIN = 10.0;
 const float TEMP_MAX = 60.0;
@@ -112,6 +113,12 @@ const int ALARMA_CO2_MIN_RANGO = 300; // Valores a revisar con el usuario
 const int ALARMA_CO2_MAX_RANGO = 8000; // Valores a revisar con el usuario
 const int ALARMA_CO2_PASO = 50; // Paso más grande para CO2
 
+unsigned long tiempoInicioModoFuncionamiento = 0; // Marca el inicio del modo funcionamiento
+unsigned long tiempoUltimoAvisoAlarma = 0;        // Marca el inicio del ciclo de aviso/sensores
+bool mostrarAvisoAlarma = false;                  // Indica si se está mostrando el aviso de alarma
+bool alarmasSilenciadas = false;                  // Indica si las alarmas están silenciadas
+unsigned long tiempoSilenciadoAlarmas = 0;        // Marca cuándo se silenciaron las alarmas
+const unsigned long DURACION_SILENCIO_ALARMAS = 180000; // 3 minutos de silencio
 
 // Opciones del menú principal
 String opcionesMenuPrincipal[] = {
@@ -168,6 +175,7 @@ bool pantallaMostradaACO2Min = false; // Bandera para saber si se mostró la pan
 bool pantallaEditTempMostrada = false; // Bandera para saber si se mostró la pantalla de edición de temperatura
 bool pantallaEditHumMostrada = false; // Bandera para saber si se mostró la pantalla de edición de humedad
 bool pantallaEditCO2Mostrada = false; // Bandera para saber si se mostró la pantalla de edición de CO2
+bool mensajeMostrado = false; // Bandera para saber si el mensaje fijo de "Pulsa para ir a Menu" ya fue mostrado
 // ---------------- VARIABLES DE CONTROL DE RELÉS Y VENTILADOR ----------------
 // Histéresis para calefactor (Relay 2)
 const float HISTERESIS_TEMP_ENCENDER_CALEFACTOR = 2.0; // Encender cuando Temp <= Setpoint - 2C
@@ -250,7 +258,7 @@ bool estaEnExcesoHumedad();
 bool estaEnExcesoCO2();
 bool estaEnDefectoCO2();
 //funcionamiento
-
+void obtenerAlarmasActivas(String &avisos);
 
 
 // ---------------- SETUP ----------------
@@ -412,6 +420,7 @@ static unsigned long lastEncoderCheckTime = 0;
                 guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
             } else { // NO
                 proximoEstado = ESTADO_MENU_PRINCIPAL;
+                guardarEstadoAppEEPROM(); // Guardar el estado de Menú Principal en EEPROM
             }
             necesitaRefrescarLCD = true;
         }
@@ -501,6 +510,7 @@ static unsigned long lastEncoderCheckTime = 0;
           if (proximoEstado == ESTADO_MENU_PRINCIPAL) {
               indiceMenuPrincipal = 0;
               desplazamientoScroll = 0;
+              guardarEstadoAppEEPROM(); // Guardar el estado de Menú Principal en EEPROM
           } else if (proximoEstado == ESTADO_EDITAR_SETPOINTS) {
               pantallaEditSetMostrada = false;
               indiceSubMenuSetpoints = 0;
@@ -512,6 +522,11 @@ static unsigned long lastEncoderCheckTime = 0;
           } else if (proximoEstado == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO) {
               indiceConfirmacion = 0; // Siempre iniciar en "SI" para confirmaciones
               desplazamientoScroll = 0;
+              mostrarAvisoAlarma = false;
+              alarmasSilenciadas = false;
+              tiempoSilenciadoAlarmas = 0;
+              tiempoUltimoAvisoAlarma = 0;
+              mensajeMostrado = false;
           } else if (proximoEstado == ESTADO_MODO_FUNCIONAMIENTO) {
               initialMessageDisplayed = false; // ETIQUETA: Reiniciar bandera de mensaje inicial
               lastDisplayedTemp = -999.0; // Forzar la primera visualización de datos de sensores
@@ -521,6 +536,7 @@ static unsigned long lastEncoderCheckTime = 0;
               estadoVentiladorActual = VENTILADOR_INACTIVO;
               digitalWrite(RELAY1, HIGH); // Asegurarse de que el ventilador esté apagado
               digitalWrite(RELAY2, HIGH); // Asegurarse de que el calefactor esté apagado
+              guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
           }  else if (proximoEstado == ESTADO_EDITAR_TEMP){
           pantallaEditTempMostrada = false; // Reiniciar bandera de pantalla de edición de temperatura
           } else if (proximoEstado == ESTADO_EDITAR_HUM){
@@ -768,8 +784,8 @@ void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
             int indiceOpcion = desplazamientoScroll + i;
             String linea;
             switch (indiceOpcion) {
-                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
-                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
+                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " C"; break;
+                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " C"; break;
                 case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
                 case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
                 case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
@@ -885,8 +901,22 @@ static bool mensajeMostrado = false;
 static int indiceConfirmacionLocal = 0; // 0 = SI, 1 = NO
 static int lastIndiceConfirmacion = -1;
 static bool pantallaConfirmacionMostrada = false;
+static bool primerIngreso = true; // Para marcar el primer ingreso al modo funcionamiento
+static bool avisoMostradoEnLCD = false;
+static String ultimoAvisoMostrado = "";
+
 unsigned long currentMillis = millis();
-    // Mostrar mensaje inicial por 3 segundos
+
+ // Inicializar tiempo de inicio al entrar por primera vez
+    if (primerIngreso) {
+        tiempoInicioModoFuncionamiento = currentMillis;
+        tiempoUltimoAvisoAlarma = currentMillis;
+        mostrarAvisoAlarma = false;
+        alarmasSilenciadas = false;
+        tiempoSilenciadoAlarmas = 0;
+        primerIngreso = false;
+    }
+  // Mostrar mensaje inicial por 3 segundos
     if (!initialMessageDisplayed) {
         lcd.clear();
         lcd.home();
@@ -1039,11 +1069,11 @@ unsigned long currentMillis = millis();
                 break;
 
             case VENTILADOR_ENCENDIDO_5S:
-                if (currentMillis - temporizadorActivoVentilador >= 5000) {
+                if (currentMillis - temporizadorActivoVentilador >= 10000) {
                     digitalWrite(RELAY1, HIGH);
                     estadoVentiladorActual = VENTILADOR_ESPERA_ESTABILIZACION;
                     temporizadorActivoVentilador = currentMillis;
-                    Serial.println("Ventilador OFF (después de 5s)");
+                    Serial.println("Ventilador OFF (después de 10s)");
                 }
                 break;
 
@@ -1085,13 +1115,55 @@ unsigned long currentMillis = millis();
                 break;
         }
     }
+    // --- Alternancia de pantalla de alarmas/sensores ---
+    static unsigned long tiempoAlternarPantalla = 0;
+    static bool mostrandoAlarmas = false;
+    String avisos = "";
+    obtenerAlarmasActivas(avisos);
 
-    // --- Actualización selectiva del LCD ---
+    if (currentMillis - tiempoInicioModoFuncionamiento >= 180000 && avisos.length() > 0 && !alarmasSilenciadas) {
+        if (currentMillis - tiempoAlternarPantalla >= 3000) {
+            mostrandoAlarmas = !mostrandoAlarmas;
+            tiempoAlternarPantalla = currentMillis;
+            avisoMostradoEnLCD = false; // Forzar refresco solo al alternar
+        } 
+
+        if (mostrandoAlarmas) {
+        // Solo refrescar si el aviso cambió o no se mostró aún
+          if (!avisoMostradoEnLCD || ultimoAvisoMostrado != avisos) {
+              lcd.clear();
+              int linea = 0;
+              size_t inicio = 0;
+              while (linea < LCD_ROWS && inicio < avisos.length()) {
+                  int fin = avisos.indexOf('\n', inicio);
+                  if (fin == -1) fin = avisos.length();
+                  String avisoLinea = avisos.substring(inicio, fin);
+                  while (avisoLinea.length() < LCD_COLUMNS) avisoLinea += " ";
+                  lcd.setCursor(0, linea);
+                  lcd.print(avisoLinea);
+                  inicio = fin + 1;
+                  linea++;
+              }
+          ultimoAvisoMostrado = avisos;
+          avisoMostradoEnLCD = true;
+          }
+          avisoMostradoEnLCD = true;
+          ultimoAvisoMostrado = avisos;
+          return; // No mostrar sensores mientras se muestra el aviso
+        }
+    } else {
+          avisoMostradoEnLCD = false; // Forzar refresco cuando vuelva a mostrar aviso
+    }
+
+
+
+    // --------------------- Actualización selectiva del LCD ------------------------//
     // Línea 0: Temperatura
     if (abs(currentTemp - lastDisplayedTemp) > TEMP_DISPLAY_THRESHOLD || lastDisplayedTemp == -999.0) {
         lastDisplayedTemp = currentTemp;
         lcd.setCursor(0, 0);
-        String linea = "T: " + String(lastDisplayedTemp, 1) + " C        ";
+        String linea = "T: " + String(lastDisplayedTemp, 1) + " C";
+
         while (linea.length() < LCD_COLUMNS) linea += " ";
         lcd.print(linea);
     }
@@ -1099,7 +1171,7 @@ unsigned long currentMillis = millis();
     if (abs(currentHum - lastDisplayedHum) > HUM_DISPLAY_THRESHOLD || lastDisplayedHum == -999.0) {
         lastDisplayedHum = currentHum;
         lcd.setCursor(0, 1);
-        String linea = "H: " + String(lastDisplayedHum, 0) + " %        ";
+        String linea = "H: " + String(lastDisplayedHum, 0) + " %";
         while (linea.length() < LCD_COLUMNS) linea += " ";
         lcd.print(linea);
     }
@@ -1107,7 +1179,7 @@ unsigned long currentMillis = millis();
     if (abs(currentCO2 - lastDisplayedCO2) > CO2_DISPLAY_THRESHOLD || lastDisplayedCO2 == -999.0) {
         lastDisplayedCO2 = currentCO2;
         lcd.setCursor(0, 2);
-        String linea = "CO2: " + String((int)lastDisplayedCO2) + " ppm      ";
+        String linea = "CO2: " + String((int)lastDisplayedCO2) + " ppm";
         while (linea.length() < LCD_COLUMNS) linea += " ";
         lcd.print(linea);
     }
@@ -1121,13 +1193,91 @@ unsigned long currentMillis = millis();
         mensajeMostrado = true;
     }
 
-    // Envío de datos a Firebase
-    if(firebase.sendData(currentTemp, currentHum, currentCO2)) {
-        Serial.println("Datos enviados a Firebase");
-    } else {
-        Serial.println("Sin cambios significativos (o error de Firebase)");
+    // --------------------- SISTEMA DE AVISOS DE ALARMAS ---------------------------------------//
+    static String ultimasAlarmasActivas = ""; // Guarda el último conjunto de alarmas activas
+
+    if (currentMillis - tiempoInicioModoFuncionamiento >= 180000) {
+      String avisos = "";
+      obtenerAlarmasActivas(avisos);
+
+      // Detectar si hay un cambio en las alarmas activas (nueva alarma o se desactivó alguna)
+      static String alarmasPrevias = "";
+      bool cambioAlarmas = (avisos != alarmasPrevias);
+      alarmasPrevias = avisos;
+
+    // Si hay un cambio en las alarmas activas, desilenciar automáticamente
+    if (cambioAlarmas && alarmasSilenciadas) {
+        alarmasSilenciadas = false;
+        mostrarAvisoAlarma = false;
+        necesitaRefrescarLCD = true;
     }
+
+    // Si el usuario gira el encoder
+    if (deltaEncoder != 0 && avisos.length() > 0) {
+        if (!alarmasSilenciadas) {
+            // Silenciar alarmas
+            alarmasSilenciadas = true;
+            tiempoSilenciadoAlarmas = currentMillis;
+            mostrarAvisoAlarma = false;
+            necesitaRefrescarLCD = true;
+        } else {
+            // Si ya están silenciadas, desilenciar
+            alarmasSilenciadas = false;
+            mostrarAvisoAlarma = false;
+            necesitaRefrescarLCD = true;
+        }
+    }
+//////////////////////////////////////
+
+    
+    // Si las alarmas están silenciadas y hay alarmas activas, mostrar mensaje especial
+    String avisosTemp = "";
+    obtenerAlarmasActivas(avisosTemp);
+    if (alarmasSilenciadas && avisosTemp.length() > 0) {
+      lcd.setCursor(0, 0);
+      String linea = "T: " + String(lastDisplayedTemp, 1) + " C - H: " + String(lastDisplayedHum, 0) + " %";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 1);
+      linea = "CO2: " + String((int)lastDisplayedCO2) + " ppm";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 2);
+      linea = "Alarmas silenciadas";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 3);
+      linea = "Pulsa para ir a menu";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      return;
+    }
+
+    // Si hay alarmas activas y no están silenciadas, mostrar la opción de silenciar
+    if (avisosTemp.length() > 0 && !alarmasSilenciadas && currentMillis - tiempoInicioModoFuncionamiento >= 180000) {
+      lcd.setCursor(0, 0);
+      String linea = "T: " + String(lastDisplayedTemp, 1) + " C - H: " + String(lastDisplayedHum, 0) + " %";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 1);
+      linea = "CO2: " + String((int)lastDisplayedCO2) + " ppm";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 2);
+      linea = "Girar para silenciar";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      lcd.setCursor(0, 3);
+      linea = "Pulsa para ir a menu";
+      while (linea.length() < LCD_COLUMNS) linea += " ";
+      lcd.print(linea);
+      return;
+    }
+  }
 }
+
+
+
 
 
 // ---------------- FUNCIONES EEPROM ----------------
@@ -1280,6 +1430,7 @@ void manejarEditarHumedad(int deltaEncoder, bool pulsadoSwitch) {
 
 void manejarEditarCO2(int deltaEncoder, bool pulsadoSwitch) {
   static bool lastValor = -999;
+ 
   // Forzar refresco completo al entrar por primera vez
   if (!pantallaEditCO2Mostrada) {
   lcd.clear();
@@ -1443,6 +1594,15 @@ void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
   }
 }
 
+void obtenerAlarmasActivas(String &avisos) {
+    avisos = "";
+    if (currentTemp > alarmaTempMax) avisos += "ALERTA: TEMP ALTA!\n";
+    if (currentTemp < alarmaTempMin) avisos += "ALERTA: TEMP BAJA!\n";
+    if (currentHum > alarmaHumMax) avisos += "ALERTA: HUM ALTA!\n";
+    if (currentHum < alarmaHumMin) avisos += "ALERTA: HUM BAJA!\n";
+    if (currentCO2 > alarmaCO2Max) avisos += "ALERTA: CO2 ALTO!\n";
+    if (currentCO2 < alarmaCO2Min) avisos += "ALERTA: CO2 BAJO!\n";
+}
 // ---------------- FUNCIONES AUXILIARES DE ESTADO DEL SISTEMA ----------------
 bool estaEnExcesoTemperatura() {
     return currentTemp > (setpointTemperatura + UMBRAL_TEMP_VENTILADOR);
