@@ -119,8 +119,8 @@ String opcionesMenuPrincipal[] = {
   "Alarmas",
   "Modo Funcionamiento"
 };
-
-int desplazamientoScroll = 0;
+int lastDesplazamientoScrollAlarma = -1; // Para evitar refresco innecesario de pantalla de alarmas
+int desplazamientoScroll = 0; // Desplazamiento para el scroll de opciones en pantalla
 const int OPCIONES_VISIBLES_PANTALLA = 4;
 
 enum EstadoApp {
@@ -154,9 +154,20 @@ const float TEMP_DISPLAY_THRESHOLD = 0.2; // Cambio de 0.2 C
 const float HUM_DISPLAY_THRESHOLD = 1.0;  // Cambio de 1%
 const int CO2_DISPLAY_THRESHOLD = 20;     // Cambio de 20 ppm (según la última indicación del usuario)
 
+// EXTRAS
 unsigned long modoFuncionamientoStartTime = 0; // Para rastrear el tiempo de entrada para el mensaje inicial
 bool initialMessageDisplayed = false; // Bandera para asegurar que el mensaje inicial se muestre solo una vez
 bool esperandoConfirmacion = false;
+bool pantallaMostradaAlarma = false;
+bool pantallaMostradaATMax = false; // Bandera para saber si se mostró la pantalla de alarma de temperatura maxima
+bool pantallaMostradaATMin = false; // Bandera para saber si se mostró la pantalla de alarma de temperatura minima
+bool pantallaMostradaAHMax = false; // Bandera para saber si se mostró la pantalla de alarma de humedad maxima
+bool pantallaMostradaAHMin = false; // Bandera para saber si se mostró la pantalla de alarma de humedad minima
+bool pantallaMostradaACO2Max = false; // Bandera para saber si se mostró la pantalla de alarma de CO2 maxima
+bool pantallaMostradaACO2Min = false; // Bandera para saber si se mostró la pantalla de alarma de CO2 minima
+bool pantallaEditTempMostrada = false; // Bandera para saber si se mostró la pantalla de edición de temperatura
+bool pantallaEditHumMostrada = false; // Bandera para saber si se mostró la pantalla de edición de humedad
+bool pantallaEditCO2Mostrada = false; // Bandera para saber si se mostró la pantalla de edición de CO2
 // ---------------- VARIABLES DE CONTROL DE RELÉS Y VENTILADOR ----------------
 // Histéresis para calefactor (Relay 2)
 const float HISTERESIS_TEMP_ENCENDER_CALEFACTOR = 2.0; // Encender cuando Temp <= Setpoint - 2C
@@ -320,7 +331,7 @@ static unsigned long lastEncoderCheckTime = 0;
     necesitaRefrescarLCD = true;
   }
   EstadoApp proximoEstado = estadoActualApp;
-
+  // Manejo de estados de la aplicación
   switch (estadoActualApp) {
     case ESTADO_MENU_PRINCIPAL:
       if (deltaEncoderActual != 0) {
@@ -483,7 +494,7 @@ static unsigned long lastEncoderCheckTime = 0;
 
   }
 
-  // ETIQUETA: Lógica de transición de estado y refresco de LCD
+  // Lógica de transición de estado y refresco de LCD (((BANDERAS)))
   if (proximoEstado != estadoActualApp || necesitaRefrescarLCD) {
       if (proximoEstado != estadoActualApp) {
           // Lógica para reiniciar índices al cambiar de estado principal
@@ -497,6 +508,7 @@ static unsigned long lastEncoderCheckTime = 0;
           } else if (proximoEstado == ESTADO_EDITAR_ALARMAS) {
               indiceEditarAlarmas = 0;
               desplazamientoScroll = 0;
+              pantallaMostradaAlarma = false;
           } else if (proximoEstado == ESTADO_CONFIRMACION_MODO_FUNCIONAMIENTO) {
               indiceConfirmacion = 0; // Siempre iniciar en "SI" para confirmaciones
               desplazamientoScroll = 0;
@@ -509,6 +521,26 @@ static unsigned long lastEncoderCheckTime = 0;
               estadoVentiladorActual = VENTILADOR_INACTIVO;
               digitalWrite(RELAY1, HIGH); // Asegurarse de que el ventilador esté apagado
               digitalWrite(RELAY2, HIGH); // Asegurarse de que el calefactor esté apagado
+          }  else if (proximoEstado == ESTADO_EDITAR_TEMP){
+          pantallaEditTempMostrada = false; // Reiniciar bandera de pantalla de edición de temperatura
+          } else if (proximoEstado == ESTADO_EDITAR_HUM){
+          pantallaEditHumMostrada = false; // Reiniciar bandera de pantalla de edición de humedad
+          } else if (proximoEstado == ESTADO_EDITAR_CO2){
+          pantallaEditCO2Mostrada = false; // Reiniciar bandera de pantalla de edición de CO2
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMAS){
+          pantallaMostradaAlarma  = false; // Reiniciar bandera de pantalla de edición de alarmas
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_TEMP_MIN){
+          pantallaMostradaATMin = false; // Reiniciar bandera de pantalla de alarma de temperatura mínima
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_TEMP_MAX){
+          pantallaMostradaATMax = false; // Reiniciar bandera de pantalla de alarma de temperatura máxima
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_HUM_MIN){
+          pantallaMostradaAHMin = false; // Reiniciar bandera de pantalla de alarma de humedad mínima
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_HUM_MAX){
+          pantallaMostradaAHMax = false; // Reiniciar bandera de pantalla de alarma de humedad máxima
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_CO2_MIN){
+          pantallaMostradaACO2Min = false; // Reiniciar bandera de pantalla de alarma de CO2 mínima
+          } else if (proximoEstado == ESTADO_EDITAR_ALARMA_CO2_MAX){
+          pantallaMostradaACO2Max = false; // Reiniciar bandera de pantalla de alarma de CO2 máxima
           }
 
           // Lógica para mantener índices al volver de una edición a un submenú
@@ -720,40 +752,81 @@ void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
 
 
 void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
-  if (indiceEditarAlarmas < desplazamientoScroll) {
-      desplazamientoScroll = indiceEditarAlarmas;
-  } else if (indiceEditarAlarmas >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
-      desplazamientoScroll = indiceEditarAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
-  }
+   static int lastIndiceAlarma = -1;
 
-  for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
-    int indiceOpcion = desplazamientoScroll + i;
-    String linea;
-
-    switch (indiceOpcion) {
-      case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
-      case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
-      case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
-      case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
-      case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
-      case 5: linea = "CO2 Max: " + String(alarmaCO2Max) + " ppm "; break;
-      case 6: linea = "Guardar y Volver "; break;
-      default: linea = ""; break;
+    // Lógica de scroll
+    if (indiceEditarAlarmas < desplazamientoScroll) {
+        desplazamientoScroll = indiceEditarAlarmas;
+    } else if (indiceEditarAlarmas >= desplazamientoScroll + OPCIONES_VISIBLES_PANTALLA) {
+        desplazamientoScroll = indiceEditarAlarmas - OPCIONES_VISIBLES_PANTALLA + 1;
     }
 
-    // Agrega el selector
-    if (indiceOpcion == indiceEditarAlarmas) {
-      linea = "> " + linea;
-    } else {
-      linea = "  " + linea;
+    // Refresco completo al entrar por primera vez
+    if (!pantallaMostradaAlarma) {
+        lcd.clear();
+        for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
+            int indiceOpcion = desplazamientoScroll + i;
+            String linea;
+            switch (indiceOpcion) {
+                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
+                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
+                case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
+                case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
+                case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
+                case 5: linea = "CO2 Max: " + String(alarmaCO2Max) + " ppm "; break;
+                case 6: linea = "Guardar y Volver "; break;
+                default: linea = ""; break;
+            }
+            if (indiceOpcion == indiceEditarAlarmas) {
+                linea = "> " + linea;
+            } else {
+                linea = "  " + linea;
+            }
+            while (linea.length() < LCD_COLUMNS) linea += " ";
+            lcd.setCursor(0, i);
+            lcd.print(linea);
+        }
+        lastIndiceAlarma = indiceEditarAlarmas;
+        pantallaMostradaAlarma = true;
+        return;
     }
 
-    // Rellenar con espacios para limpiar la línea
-    while (linea.length() < LCD_COLUMNS) linea += " ";
+    // Procesar input del Encoder
+    if (deltaEncoder != 0) {
+        indiceEditarAlarmas += deltaEncoder;
+        if (indiceEditarAlarmas < 0) indiceEditarAlarmas = TOTAL_OPCIONES_EDITAR_ALARMAS - 1;
+        if (indiceEditarAlarmas >= TOTAL_OPCIONES_EDITAR_ALARMAS) indiceEditarAlarmas = 0;
+    }
 
-    lcd.setCursor(0, i);
-    lcd.print(linea);
-  }
+    // Solo actualizar las líneas necesarias
+    if (lastIndiceAlarma != indiceEditarAlarmas || desplazamientoScroll != lastDesplazamientoScrollAlarma) {
+        // Redibuja toda la ventana visible si el scroll cambió
+        lcd.clear();
+        for (int i = 0; i < OPCIONES_VISIBLES_PANTALLA; i++) {
+            int indiceOpcion = desplazamientoScroll + i;
+            String linea;
+            switch (indiceOpcion) {
+                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
+                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
+                case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
+                case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
+                case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
+                case 5: linea = "CO2 Max: " + String(alarmaCO2Max) + " ppm "; break;
+                case 6: linea = "Guardar y Volver "; break;
+                default: linea = ""; break;
+            }
+            if (indiceOpcion == indiceEditarAlarmas) {
+                linea = "> " + linea;
+            } else {
+                linea = "  " + linea;
+            }
+            while (linea.length() < LCD_COLUMNS) linea += " ";
+            lcd.setCursor(0, i);
+            lcd.print(linea);
+        }
+        lastIndiceAlarma = indiceEditarAlarmas;
+        lastDesplazamientoScrollAlarma = desplazamientoScroll;
+    }
 }
 
 void manejarConfirmacionModoFuncionamiento(int deltaEncoder, bool pulsadoSwitch) {
@@ -1042,7 +1115,7 @@ unsigned long currentMillis = millis();
 
     if (!mensajeMostrado) {
         lcd.setCursor(0, 3);
-        String linea = "Pulsar para ir a Menu";
+        String linea = "Pulsa para ir a Menu";
         while (linea.length() < LCD_COLUMNS) linea += " ";
         lcd.print(linea);
         mensajeMostrado = true;
@@ -1154,42 +1227,86 @@ void cargarEstadoAppEEPROM() {
 
 
 void manejarEditarTemperatura(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  // Forzar refresco completo al entrar por primera vez
+  if (!pantallaEditTempMostrada) {
   lcd.clear();
   lcd.home();
-  lcd.print("Temperatura         ");
+  String titulo = "Temperatura";
+  while (titulo.length() < LCD_COLUMNS) titulo += " ";
+  lcd.print(titulo);
   lcd.setCursor(0, 1);
-  lcd.print(String(setpointTemperatura, 1) + " C        ");
+  lcd.print(String(setpointTemperatura, 1) + " C              ");
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
+  lastValor = setpointTemperatura; // Guardar el valor inicial
+  pantallaEditTempMostrada = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (setpointTemperatura != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(setpointTemperatura, 1) + " C              ");
+    lastValor = setpointTemperatura; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarHumedad(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  // Forzar refresco completo al entrar por primera vez
+  if (!pantallaEditHumMostrada) {
   lcd.clear();
   lcd.home();
-  lcd.print("Humedad             ");
+  String titulo = "Humedad";
+  while (titulo.length() < LCD_COLUMNS) titulo += " ";
+  lcd.print(titulo);
   lcd.setCursor(0, 1);
-  lcd.print(String(setpointHumedad, 0) + " %        ");
+  lcd.print(String(setpointHumedad, 0) + " %              ");
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
+  lastValor = setpointHumedad; // Guardar el valor inicial
+  pantallaEditHumMostrada = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (setpointHumedad != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(setpointHumedad, 0) + " %        ");
+    lastValor = setpointHumedad; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarCO2(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  // Forzar refresco completo al entrar por primera vez
+  if (!pantallaEditCO2Mostrada) {
   lcd.clear();
   lcd.home();
-  lcd.print("CO2                 ");
+  String titulo = "CO2";
+  while (titulo.length() < LCD_COLUMNS) titulo += " ";
+  lcd.print(titulo);
   lcd.setCursor(0, 1);
-  lcd.print(String(setpointCO2) + " ppm       ");
+  lcd.print(String(setpointCO2) + " ppm            ");
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
+  lastValor = setpointCO2; // Guardar el valor inicial
+  pantallaEditCO2Mostrada = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (setpointCO2 != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(setpointCO2) + " ppm       ");
+    lastValor = setpointCO2; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarAlarmaTempMin(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  if (!pantallaMostradaATMin){
   lcd.clear();
   lcd.home();
   lcd.print("Alarma Temp Min     ");
@@ -1199,21 +1316,44 @@ void manejarEditarAlarmaTempMin(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
   lcd.print("Pulsar para volver   ");
+  lastValor = alarmaTempMin; // Guardar el valor inicial
+  pantallaMostradaATMin = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (alarmaTempMin != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaTempMin, 1) + " C        ");
+    lastValor = alarmaTempMin; // Actualizar el último valor mostrado
+  }
+  
 }
 
 void manejarEditarAlarmaTempMax(int deltaEncoder, bool pulsadoSwitch) {
-  lcd.clear();
-  lcd.home();
-  lcd.print("Alarma Temp Max     ");
-  lcd.setCursor(0, 1);
-  lcd.print(String(alarmaTempMax, 1) + " C        ");
-  lcd.setCursor(0, 2);
-  lcd.print("Girar para ajustar  ");
-  lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  static bool lastValor = -999;
+  if (!pantallaMostradaATMax) {
+    lcd.clear();
+    lcd.home();
+    lcd.print("Alarma Temp Max     ");
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaTempMax, 1) + " C        ");
+    lcd.setCursor(0, 2);
+    lcd.print("Girar para ajustar  ");
+    lcd.setCursor(0, 3);
+    lcd.print("Pulsar para volver   ");
+    lastValor = alarmaTempMax; // Guardar el valor inicial
+    pantallaMostradaATMax = true; // Marcar que la pantalla ya se mostró
+    return;
+  }
+  if (alarmaTempMax != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaTempMax, 1) + " C        ");
+    lastValor = alarmaTempMax; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarAlarmaHumMin(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  if (!pantallaMostradaAHMin) {
   lcd.clear();
   lcd.home();
   lcd.print("Alarma Hum Min      ");
@@ -1223,9 +1363,20 @@ void manejarEditarAlarmaHumMin(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
   lcd.print("Pulsar para volver   ");
+  lastValor = alarmaHumMin; // Guardar el valor inicial
+  pantallaMostradaAHMin = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (alarmaHumMin != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaHumMin, 0) + " %        ");
+    lastValor = alarmaHumMin; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarAlarmaHumMax(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  if (!pantallaMostradaAHMax) {
   lcd.clear();
   lcd.home();
   lcd.print("Alarma Hum Max      ");
@@ -1235,9 +1386,20 @@ void manejarEditarAlarmaHumMax(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
   lcd.print("Pulsar para volver   ");
+  lastValor = alarmaHumMax; // Guardar el valor inicial
+  pantallaMostradaAHMax = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (alarmaHumMax != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaHumMax, 0) + " %        ");
+    lastValor = alarmaHumMax; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarAlarmaCO2Min(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  if (!pantallaMostradaACO2Min) {
   lcd.clear();
   lcd.home();
   lcd.print("Alarma CO2 Min      ");
@@ -1247,9 +1409,20 @@ void manejarEditarAlarmaCO2Min(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
   lcd.print("Pulsar para volver   ");
+  lastValor = alarmaCO2Min; // Guardar el valor inicial
+  pantallaMostradaACO2Min = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  }
+  if (alarmaCO2Min != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaCO2Min) + " ppm       ");
+    lastValor = alarmaCO2Min; // Actualizar el último valor mostrado
+  }
 }
 
 void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
+  static bool lastValor = -999;
+  if (!pantallaMostradaACO2Max) {
   lcd.clear();
   lcd.home();
   lcd.print("Alarma CO2 Max      ");
@@ -1259,6 +1432,15 @@ void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
   lcd.print(" Girar para ajustar  ");
   lcd.setCursor(0, 3);
   lcd.print(" Pulsar para volver   ");
+  lastValor = alarmaCO2Max; // Guardar el valor inicial
+  pantallaMostradaACO2Max = true; // Marcar que la pantalla ya se mostró
+  return; // Salir para evitar refresco innecesario
+  } 
+  if (alarmaCO2Max != lastValor) {
+    lcd.setCursor(0, 1);
+    lcd.print(String(alarmaCO2Max) + " ppm       ");
+    lastValor = alarmaCO2Max; // Actualizar el último valor mostrado
+  }
 }
 
 // ---------------- FUNCIONES AUXILIARES DE ESTADO DEL SISTEMA ----------------
