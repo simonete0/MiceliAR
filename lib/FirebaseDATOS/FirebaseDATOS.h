@@ -18,6 +18,15 @@ public:
     bool sendData(float temperature, float humidity, float co2 = -1);
     bool shouldUpdate(float newTemp, float newHumidity, float newCO2 = -1);
     
+    bool leerSetpointsFirebase(float &temp, float &hum, int &co2);
+    bool leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, float &hmax, int &co2min, int &co2max);
+    bool leerUltimoEstadoFirebase(String &estado);
+    
+    void guardarSetpointsFirebase(float temp, float hum, int co2);
+    void guardarAlarmasFirebase(float tmin, float tmax, float hmin, float hmax, int co2min, int co2max);
+    void guardarUltimoEstadoFirebase(const String& estado);
+
+    
 private:
     WiFiUDP ntpUDP;
     NTPClient timeClient;

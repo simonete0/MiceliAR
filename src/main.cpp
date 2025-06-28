@@ -74,17 +74,17 @@ int indiceConfirmacion = 0;
 const int TOTAL_OPCIONES_CONFIRMACION = 2; // SI, NO
 
 // Setpoints
-float setpointTemperatura = 25.0;
-float setpointHumedad = 70.0;
-int setpointCO2 = 6000; // Valor por defecto para etapa de Incubación
+float setpointTemperatura;// = 25.0;
+float setpointHumedad;// = 70.0;
+int setpointCO2;// = 6000; // Valor por defecto para etapa de Incubación
 
 // Alarmas
-float alarmaTempMin = 18.0;
-float alarmaTempMax = 30.0;
-float alarmaHumMin = 50.0;
-float alarmaHumMax = 90.0;
-int alarmaCO2Min = 600; // Estos valores deben ser revisados para la incubación
-int alarmaCO2Max = 1200; // Estos valores deben ser revisados para la incubación
+float alarmaTempMin; //= 18.0;
+float alarmaTempMax;// = 30.0;
+float alarmaHumMin;// = 50.0;
+float alarmaHumMax;// = 90.0;
+int alarmaCO2Min;// = 600; // Estos valores deben ser revisados para la incubación
+int alarmaCO2Max;// = 1200; // Estos valores deben ser revisados para la incubación
 unsigned long tiempoAlternarPantalla = 0;
 bool mostrandoAlarmas = false;
 // Rangos de edición y pasos (Setpoints)
@@ -92,11 +92,11 @@ const float TEMP_MIN = 10.0;
 const float TEMP_MAX = 60.0;
 const float TEMP_PASO = 0.5;
 
-const float HUM_MIN = 20.0;
+const float HUM_MIN = 10.0;
 const float HUM_MAX = 100.0;
 const float HUM_PASO = 1.0;
 
-const int CO2_MIN = 300; // Ampliado para permitir valores altos de incubación
+const int CO2_MIN = 50; // Ampliado para permitir valores altos de incubación
 const int CO2_MAX = 10000; // Ampliado para permitir valores altos de incubación
 const int CO2_PASO = 50; // Paso más grande para CO2
 
@@ -106,11 +106,11 @@ const float ALARMA_TEMP_MAX_RANGO = 55.0;
 const float ALARMA_TEMP_PASO = 0.5;
 
 const float ALARMA_HUM_MIN_RANGO = 10.0;
-const float ALARMA_HUM_MAX_RANGO = 95.0;
+const float ALARMA_HUM_MAX_RANGO = 100.0;
 const float ALARMA_HUM_PASO = 1.0;
 
-const int ALARMA_CO2_MIN_RANGO = 300; // Valores a revisar con el usuario
-const int ALARMA_CO2_MAX_RANGO = 8000; // Valores a revisar con el usuario
+const int ALARMA_CO2_MIN_RANGO = 50; // Valores a revisar con el usuario
+const int ALARMA_CO2_MAX_RANGO = 9000; // Valores a revisar con el usuario
 const int ALARMA_CO2_PASO = 50; // Paso más grande para CO2
 
 unsigned long tiempoInicioModoFuncionamiento = 0; // Marca el inicio del modo funcionamiento
@@ -148,7 +148,19 @@ enum EstadoApp {
 };
 EstadoApp estadoActualApp = ESTADO_MENU_PRINCIPAL;
 
+//FirebaseParametros
+float temp, hum;
+int co2;
+float tmin, tmax, hmin, hmax;
+int co2min, co2max;
+String estado;
+float settemp, sethum;
+int setco2;
 bool necesitaRefrescarLCD = true;
+float lastTempFirebase = -999.0; // Inicializar a un valor imposible para forzar la primera visualización
+float lastHumFirebase = -999.0;
+float lastCO2Firebase = -999.0;
+
 
 // ETIQUETA: Variables para 'Modo Funcionamiento'
 float currentTemp, currentHum, currentCO2;
@@ -278,15 +290,7 @@ void setup() {
   pinMode(DT_ENCODER, INPUT_PULLUP);
   pinMode(SW_ENCODER, INPUT_PULLUP);
 
-  attachInterrupt(digitalPinToInterrupt(CLOCK_ENCODER), leerEncoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(SW_ENCODER), leerSwitchISR, FALLING);
-
-  estadoClkAnterior = digitalRead(CLOCK_ENCODER);
-
-  cargarSetpointsEEPROM();
-  cargarEstadoAppEEPROM(); // Cargar el último estado de la aplicación
-
-  // ETIQUETA: Inicializacion de sensores y Firebase de 'prueba encoder'
+   // ETIQUETA: Inicializacion de sensores y Firebase de 'prueba encoder'
   pinMode(DHTPIN, INPUT_PULLUP); // Fuerza modo correcto para GPIO14
   delay(100);
   dhtSensor.iniciar();
@@ -295,6 +299,41 @@ void setup() {
   firebase.begin(WIFI_SSID, WIFI_PASSWORD,
                 FIREBASE_API_KEY, FIREBASE_URL,
                 FIREBASE_EMAIL, FIREBASE_PASSWORD);
+  
+  attachInterrupt(digitalPinToInterrupt(CLOCK_ENCODER), leerEncoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(SW_ENCODER), leerSwitchISR, FALLING);
+
+  estadoClkAnterior = digitalRead(CLOCK_ENCODER);
+
+    if (firebase.leerSetpointsFirebase(settemp, sethum, setco2)) {
+        setpointTemperatura = settemp;
+        setpointHumedad = sethum;
+        setpointCO2 = setco2;
+    }
+    if (firebase.leerAlarmasFirebase(tmin, tmax, hmin, hmax, co2min, co2max)) {
+        alarmaTempMin = tmin;
+        alarmaTempMax = tmax;
+        alarmaHumMin = hmin;
+        alarmaHumMax = hmax;
+        alarmaCO2Min = co2min;
+        alarmaCO2Max = co2max;
+    }
+    if (firebase.leerUltimoEstadoFirebase(estado)) {
+        if (estado == "ESTADO_MODO_FUNCIONAMIENTO") {
+            estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
+        } else {
+            estadoActualApp = ESTADO_MENU_PRINCIPAL;
+        }
+    }  
+    // Subida inicial de alarmas y estado si es la primera vez
+    firebase.guardarAlarmasFirebase(
+        alarmaTempMin, alarmaTempMax,
+        alarmaHumMin, alarmaHumMax,
+        alarmaCO2Min, alarmaCO2Max
+    );
+
+
+ 
 
   // Si el último estado guardado fue "Modo Funcionamiento", inicia en ese estado
   if (lastAppStateFlag == 1) {
@@ -375,8 +414,10 @@ static unsigned long lastEncoderCheckTime = 0;
           case 1: proximoEstado = ESTADO_EDITAR_HUM; break;
           case 2: proximoEstado = ESTADO_EDITAR_CO2; break;
           case 3:
-              guardarSetpointsEEPROM();
-              proximoEstado = ESTADO_MENU_PRINCIPAL;
+          firebase.guardarSetpointsFirebase(setpointTemperatura, setpointHumedad, setpointCO2);
+          proximoEstado = ESTADO_MENU_PRINCIPAL;
+          firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL");
+
               break;
         }
         necesitaRefrescarLCD = true;
@@ -400,9 +441,14 @@ static unsigned long lastEncoderCheckTime = 0;
           case 4: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MIN; break;
           case 5: proximoEstado = ESTADO_EDITAR_ALARMA_CO2_MAX; break;
           case 6:
-              guardarSetpointsEEPROM();
-              proximoEstado = ESTADO_MENU_PRINCIPAL;
-              break;
+            firebase.guardarAlarmasFirebase(
+                alarmaTempMin, alarmaTempMax,
+                alarmaHumMin, alarmaHumMax,
+                alarmaCO2Min, alarmaCO2Max
+            );
+            proximoEstado = ESTADO_MENU_PRINCIPAL;
+            firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL"); // o el estado que corresponda
+          break;
         }
         necesitaRefrescarLCD = true;
       }
@@ -418,10 +464,7 @@ static unsigned long lastEncoderCheckTime = 0;
         if (switchPulsadoActual) {
             if (indiceConfirmacion == 0) { // SI
                 proximoEstado = ESTADO_MODO_FUNCIONAMIENTO;
-                guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
-            } else { // NO
-                proximoEstado = ESTADO_MENU_PRINCIPAL;
-                guardarEstadoAppEEPROM(); // Guardar el estado de Menú Principal en EEPROM
+                firebase.guardarUltimoEstadoFirebase("ESTADO_MODO_FUNCIONAMIENTO");
             }
             necesitaRefrescarLCD = true;
         }
@@ -511,7 +554,7 @@ static unsigned long lastEncoderCheckTime = 0;
           if (proximoEstado == ESTADO_MENU_PRINCIPAL) {
               indiceMenuPrincipal = 0;
               desplazamientoScroll = 0;
-              guardarEstadoAppEEPROM(); // Guardar el estado de Menú Principal en EEPROM
+              firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL"); // Guardar el estado de Menú Principal en Firebase
           } else if (proximoEstado == ESTADO_EDITAR_SETPOINTS) {
               pantallaEditSetMostrada = false;
               indiceSubMenuSetpoints = 0;
@@ -537,7 +580,7 @@ static unsigned long lastEncoderCheckTime = 0;
               estadoVentiladorActual = VENTILADOR_INACTIVO;
               digitalWrite(RELAY1, HIGH); // Asegurarse de que el ventilador esté apagado
               digitalWrite(RELAY2, HIGH); // Asegurarse de que el calefactor esté apagado
-              guardarEstadoAppEEPROM(); // Guardar el estado de Modo Funcionamiento en EEPROM
+              firebase.guardarUltimoEstadoFirebase("ESTADO_MODO_FUNCIONAMIENTO"); // o el estado que corresponda
           }  else if (proximoEstado == ESTADO_EDITAR_TEMP){
           pantallaEditTempMostrada = false; // Reiniciar bandera de pantalla de edición de temperatura
           } else if (proximoEstado == ESTADO_EDITAR_HUM){
@@ -761,7 +804,16 @@ void manejarEditarSetpoints(int deltaEncoder, bool pulsadoSwitch) {
         }
         lastIndice = indiceSubMenuSetpoints;
         necesitaRefrescarLCD = false;
+        // --- GUARDADO SOLO AL PULSAR SWITCH EN "Guardar y salir" ---
+        if (pulsadoSwitch && indiceSubMenuSetpoints == 3) {
+          firebase.guardarSetpointsFirebase(setpointTemperatura, setpointHumedad, setpointCO2);
+          firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL");
+          // Cambia de estado aquí si lo necesitas, por ejemplo:
+          // estadoActualApp = ESTADO_MENU_PRINCIPAL;
+          necesitaRefrescarLCD = true;
+        }
     }
+    
 
     // Si cambias de estado, recuerda resetear pantallaMostrada = false;
 }
@@ -841,6 +893,13 @@ void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
             lcd.setCursor(0, i);
             lcd.print(linea);
         }
+        // Aquí sí: solo si el usuario pulsa el switch estando en "Guardar y Volver"
+        if (pulsadoSwitch && indiceEditarAlarmas == 6) {
+            firebase.guardarAlarmasFirebase(alarmaTempMin, alarmaTempMax, alarmaHumMin, alarmaHumMax, alarmaCO2Min, alarmaCO2Max);
+            firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL");
+            estadoActualApp = ESTADO_MENU_PRINCIPAL;
+            necesitaRefrescarLCD = true;
+        }
         lastIndiceAlarma = indiceEditarAlarmas;
         lastDesplazamientoScrollAlarma = desplazamientoScroll;
     }
@@ -894,6 +953,16 @@ void leerSensores() {
   } else {
       banderaBajoCO2 = false;
   }
+  if (abs(currentTemp - lastTempFirebase) > 1.0 ||
+    abs(currentHum - lastHumFirebase) > 2.0 ||
+    abs(currentCO2 - lastCO2Firebase) > 50) {
+
+    firebase.sendData(currentTemp, currentHum, currentCO2);
+
+    lastTempFirebase = currentTemp;
+    lastHumFirebase = currentHum;
+    lastCO2Firebase = currentCO2;
+}
 }
 
 // ETIQUETA: Implementacion de manejarModoFuncionamiento
@@ -963,7 +1032,7 @@ unsigned long currentMillis = millis();
                 digitalWrite(RELAY2, HIGH); // Apagar calefactor
                 digitalWrite(RELAY3, LOW);  // Apagar humidificador
                 estadoActualApp = ESTADO_MENU_PRINCIPAL;
-                guardarEstadoAppEEPROM();
+                firebase.guardarUltimoEstadoFirebase("ESTADO_MENU_PRINCIPAL"); // o el estado que corresponda
                 necesitaRefrescarLCD = true;
             }
             // Si elige NO, solo sale de la confirmación
@@ -1560,7 +1629,7 @@ void manejarEditarAlarmaCO2Min(int deltaEncoder, bool pulsadoSwitch) {
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
   lastValor = alarmaCO2Min; // Guardar el valor inicial
   pantallaMostradaACO2Min = true; // Marcar que la pantalla ya se mostró
   return; // Salir para evitar refresco innecesario

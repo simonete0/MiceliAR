@@ -111,8 +111,119 @@ bool FirebaseDatos::sendData(float temperature, float humidity, float co2) {
         
         // Actualizar última lectura
         Firebase.RTDB.setJSON(&fbdo, "/ultima_lectura", &json);
-        json.set("hora", currentTime);
+        String fechaHora = getCurrentDate() + " " + getCurrentTime();
+        Firebase.RTDB.setString(&fbdo, "/ultima_lectura/FechaHora", fechaHora);
         return true;
     }
     return false;
+}
+void FirebaseDatos::guardarSetpointsFirebase(float settemp, float sethum, int setco2) {
+    // Solo guarda si cambió respecto a lo que hay en Firebase
+    // (puedes leer primero y comparar, o guardar siempre)
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Setpoints/Temp", settemp);
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Setpoints/Hum", sethum);
+    Firebase.RTDB.setInt(&fbdo, "/Parametros/Setpoints/CO2", setco2);
+    String fechaHora = getCurrentDate() + " " + getCurrentTime();
+    Firebase.RTDB.setString(&fbdo, "/Parametros/Setpoints/FechaHora", fechaHora);
+
+}
+
+void FirebaseDatos::guardarAlarmasFirebase(float tmin, float tmax, float hmin, float hmax, int co2min, int co2max) {
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Alarmas/TempMin", tmin);
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Alarmas/TempMax", tmax);
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Alarmas/HumMin", hmin);
+    Firebase.RTDB.setFloat(&fbdo, "/Parametros/Alarmas/HumMax", hmax);
+    Firebase.RTDB.setInt(&fbdo, "/Parametros/Alarmas/CO2Min", co2min);
+    Firebase.RTDB.setInt(&fbdo, "/Parametros/Alarmas/CO2Max", co2max);
+    String fechaHora = getCurrentDate() + " " + getCurrentTime();
+    Firebase.RTDB.setString(&fbdo, "/Parametros/Alarmas/FechaHora", fechaHora);
+
+}
+
+void FirebaseDatos::guardarUltimoEstadoFirebase(const String& estado) {
+    Firebase.RTDB.setString(&fbdo, "/Parametros/UltimoEstado/Estado", estado);
+    String fechaHora = getCurrentDate() + " " + getCurrentTime();
+    Firebase.RTDB.setString(&fbdo, "/Parametros/UltimoEstado/FechaHora", fechaHora);
+}
+
+bool FirebaseDatos::leerSetpointsFirebase(float &settemp, float &sethum, int &setco2) {
+    bool ok = true;
+    float t = settemp, h = sethum;
+    int c = setco2;
+
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Setpoints/Temp")) {
+        t = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Setpoints/Hum")) {
+        h = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Setpoints/CO2")) {
+        c = fbdo.intData();
+    } else {
+        ok = false;
+    }
+    settemp = t;
+    sethum = h;
+    setco2 = c;
+    
+    Serial.printf("Setpoints: T=%.1f H=%.1f CO2=%d\n", settemp, sethum, setco2);
+    return ok;
+}
+
+bool FirebaseDatos::leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, float &hmax, int &co2min, int &co2max) {
+    bool ok = true;
+    float tmi = tmin, tma = tmax, hmi = hmin, hma = hmax;
+    int cmi = co2min, cma = co2max;
+
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/TempMin")) {
+        tmi = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/TempMax")) {
+        tma = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/HumMin")) {
+        hmi = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/HumMax")) {
+        hma = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Alarmas/CO2Min")) {
+        cmi = fbdo.intData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Alarmas/CO2Max")) {
+        cma = fbdo.intData();
+    } else {
+        ok = false;
+    }
+    tmin = tmi;
+    tmax = tma;
+    hmin = hmi;
+    hmax = hma;
+    co2min = cmi;
+    co2max = cma;
+    
+    Serial.printf("Alarmas: Tmin=%.1f Tmax=%.1f Hmin=%.1f Hmax=%.1f CO2min=%d CO2max=%d\n",
+    tmin, tmax, hmin, hmax, co2min, co2max);
+    return ok;
+}
+
+bool FirebaseDatos::leerUltimoEstadoFirebase(String &estado) {
+    if (Firebase.RTDB.getString(&fbdo, "/Parametros/UltimoEstado/Estado")) {
+        estado = fbdo.stringData();
+    }
+    return true;
 }
