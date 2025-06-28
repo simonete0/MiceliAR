@@ -32,7 +32,7 @@
 #define DHTPIN 14        // GPIO5 (D5) para sensor DHT11
 #define DHTTYPE DHT11
 #define RELAY1 15        // D8 rele 1 (Ventilador)
-#define RELAY3 2         // D4 rele 3 (Humificador)
+#define RELAY3 2        // D7 rele 3 (Humificador)
 
 // ---------------- CONFIGURACIÓN LCD ----------------
 #define LCD_ADDRESS 0x27
@@ -317,6 +317,7 @@ void setup() {
   delay(1000);
   lcd.backlight(); // Asegurar que la luz de fondo esté encendida
   lcd.clear();
+  delay(100); // Espera para estabilizar el LCD y relés
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
@@ -822,8 +823,8 @@ void manejarEditarAlarmas(int deltaEncoder, bool pulsadoSwitch) {
             int indiceOpcion = desplazamientoScroll + i;
             String linea;
             switch (indiceOpcion) {
-                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " °C"; break;
-                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " °C"; break;
+                case 0: linea = "T Min: " + String(alarmaTempMin, 1) + " C"; break;
+                case 1: linea = "T Max: " + String(alarmaTempMax, 1) + " C"; break;
                 case 2: linea = "H Min: " + String(alarmaHumMin, 0) + " % "; break;
                 case 3: linea = "H Max: " + String(alarmaHumMax, 0) + " % "; break;
                 case 4: linea = "CO2 Min: " + String(alarmaCO2Min) + " ppm "; break;
@@ -1034,7 +1035,7 @@ unsigned long currentMillis = millis();
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
                     temporizadorActivoVentilador = currentMillis;
                     digitalWrite(RELAY1, LOW);
-                    Serial.println("Ventilador ON (Temp alta)");
+                   //Serial.println("Ventilador ON (Temp alta)");
                 } else if (estaEnExcesoHumedad()) {
                     razonActivacionVentilador = HUMEDAD_ALTA;
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
@@ -1046,7 +1047,7 @@ unsigned long currentMillis = millis();
                     estadoVentiladorActual = VENTILADOR_ENCENDIDO_3S;
                     temporizadorActivoVentilador = currentMillis;
                     digitalWrite(RELAY1, LOW);
-                    Serial.println("Ventilador ON (CO2 alto)");
+                   Serial.println("Ventilador ON (CO2 alto)");
                 }
                 break;
 
@@ -1466,7 +1467,7 @@ void manejarEditarAlarmaTempMin(int deltaEncoder, bool pulsadoSwitch) {
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
   lastValor = alarmaTempMin; // Guardar el valor inicial
   pantallaMostradaATMin = true; // Marcar que la pantalla ya se mostró
   return; // Salir para evitar refresco innecesario
@@ -1490,7 +1491,7 @@ void manejarEditarAlarmaTempMax(int deltaEncoder, bool pulsadoSwitch) {
     lcd.setCursor(0, 2);
     lcd.print("Girar para ajustar  ");
     lcd.setCursor(0, 3);
-    lcd.print("Pulsar para volver   ");
+    lcd.print("Pulsar para volver  ");
     lastValor = alarmaTempMax; // Guardar el valor inicial
     pantallaMostradaATMax = true; // Marcar que la pantalla ya se mostró
     return;
@@ -1513,7 +1514,7 @@ void manejarEditarAlarmaHumMin(int deltaEncoder, bool pulsadoSwitch) {
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
   lastValor = alarmaHumMin; // Guardar el valor inicial
   pantallaMostradaAHMin = true; // Marcar que la pantalla ya se mostró
   return; // Salir para evitar refresco innecesario
@@ -1536,7 +1537,7 @@ void manejarEditarAlarmaHumMax(int deltaEncoder, bool pulsadoSwitch) {
   lcd.setCursor(0, 2);
   lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print("Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
   lastValor = alarmaHumMax; // Guardar el valor inicial
   pantallaMostradaAHMax = true; // Marcar que la pantalla ya se mostró
   return; // Salir para evitar refresco innecesario
@@ -1580,9 +1581,9 @@ void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch) {
   lcd.setCursor(0, 1);
   lcd.print(String(alarmaCO2Max) + " ppm       ");
   lcd.setCursor(0, 2);
-  lcd.print(" Girar para ajustar  ");
+  lcd.print("Girar para ajustar  ");
   lcd.setCursor(0, 3);
-  lcd.print(" Pulsar para volver   ");
+  lcd.print("Pulsar para volver  ");
   lastValor = alarmaCO2Max; // Guardar el valor inicial
   pantallaMostradaACO2Max = true; // Marcar que la pantalla ya se mostró
   return; // Salir para evitar refresco innecesario
