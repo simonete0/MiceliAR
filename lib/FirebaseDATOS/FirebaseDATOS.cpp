@@ -227,3 +227,22 @@ bool FirebaseDatos::leerUltimoEstadoFirebase(String &estado) {
     }
     return true;
 }
+bool FirebaseDatos::leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHum, float &ultimaCO2) {
+    bool ok = true;
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/temperatura")) {
+        ultimaTemp = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/humedad")) {
+        ultimaHum = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/co2")) {
+        ultimaCO2 = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    return ok;
+}

@@ -25,7 +25,7 @@ public:
     void guardarSetpointsFirebase(float temp, float hum, int co2);
     void guardarAlarmasFirebase(float tmin, float tmax, float hmin, float hmax, int co2min, int co2max);
     void guardarUltimoEstadoFirebase(const String& estado);
-
+    bool leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHum, float &ultimaCO2);
     
 private:
     WiFiUDP ntpUDP;

@@ -1,14 +1,13 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <EEPROM.h>
+
 
 // ETIQUETA: Librerias de 'prueba encoder'
 #include "FirebaseDATOS.h"
 #include "sensorDHT11.h"
 #include "MQ2Sensor.h"
 
-#define EEPROM_SIZE 40
 
 // Pines I2C (para ESP8266) - Comunes en ambos, mantenemos la definicion principal
 #define I2C_SDA 4
@@ -40,7 +39,7 @@
 #define LCD_ROWS 4
 LiquidCrystal_I2C lcd(LCD_ADDRESS, LCD_COLUMNS, LCD_ROWS);
 
-// ETIQUETA: Objetos de 'prueba encoder'
+// ETIQUETA: Objetos 
 FirebaseDatos firebase;
 sensorDHT dhtSensor(DHTPIN);
 MQ2Sensor gasSensor(MQ2_PIN);
@@ -232,7 +231,6 @@ bool banderaBajoCO2 = false;
 // Variable para el estado guardado en EEPROM
 // 0: Modo Menu, 1: Modo Funcionamiento
 uint8_t lastAppStateFlag = 0;
-const int EEPROM_APP_STATE_ADDR = EEPROM_SIZE - sizeof(uint8_t); // Último byte de la EEPROM
 
 // ---------------- PROTOTIPOS DE FUNCIONES ----------------
 void IRAM_ATTR leerEncoderISR();
@@ -258,11 +256,6 @@ void manejarEditarAlarmaCO2Max(int deltaEncoder, bool pulsadoSwitch);
 // ETIQUETA: Prototipo de funcion para leer sensores
 void leerSensores();
 void leerEncoder();
-// Funciones para EEPROM
-void guardarSetpointsEEPROM();
-void cargarSetpointsEEPROM();
-void guardarEstadoAppEEPROM();
-void cargarEstadoAppEEPROM();
 
 // Funciones auxiliares para la prioridad de ventilación
 bool estaEnExcesoTemperatura();
@@ -325,44 +318,49 @@ void setup() {
             estadoActualApp = ESTADO_MENU_PRINCIPAL;
         }
     }  
-    // Subida inicial de alarmas y estado si es la primera vez
-    firebase.guardarAlarmasFirebase(
-        alarmaTempMin, alarmaTempMax,
-        alarmaHumMin, alarmaHumMax,
-        alarmaCO2Min, alarmaCO2Max
-    );
 
+    // Si el último estado guardado fue "Modo Funcionamiento", inicia en ese estado
+    if (lastAppStateFlag == 1) {
+        estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
+    } else {
+        estadoActualApp = ESTADO_MENU_PRINCIPAL;
+    }
+    
+    necesitaRefrescarLCD = true;
+    // No resetear indiceMenuPrincipal si se carga de EEPROM y se va a Modo Funcionamiento
+    if (estadoActualApp == ESTADO_MENU_PRINCIPAL) {
+        indiceMenuPrincipal = 0;
+    }
 
- 
+    // Leer última lectura de Firebase para inicializar los valores de comparación
+    float ultimaTemp = -999.0, ultimaHum = -999.0, ultimaCO2 = -999.0;
+    if (firebase.leerUltimaLecturaFirebase(ultimaTemp, ultimaHum, ultimaCO2)) {
+        lastTempFirebase = ultimaTemp;
+        lastHumFirebase = ultimaHum;
+        lastCO2Firebase = ultimaCO2;
+        Serial.printf("Inicializado desde Firebase: T=%.1f H=%.1f CO2=%.1f\n", lastTempFirebase, lastHumFirebase, lastCO2Firebase);
+    } else {
+        lastTempFirebase = -999.0;
+        lastHumFirebase = -999.0;
+        lastCO2Firebase = -999.0;
+        Serial.println("No se pudo leer ultima_lectura de Firebase, se inicializan a -999.0");
+    }
 
-  // Si el último estado guardado fue "Modo Funcionamiento", inicia en ese estado
-  if (lastAppStateFlag == 1) {
-      estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
-  } else {
-      estadoActualApp = ESTADO_MENU_PRINCIPAL;
-  }
-
-  necesitaRefrescarLCD = true;
-  // No resetear indiceMenuPrincipal si se carga de EEPROM y se va a Modo Funcionamiento
-  if (estadoActualApp == ESTADO_MENU_PRINCIPAL) {
-      indiceMenuPrincipal = 0;
-  }
-
-  // Inicializar el tiempo de la última ventilación programada
-  ultimoTiempoVentilacionProgramada = millis();
-  
-  Wire.begin(I2C_SDA, I2C_SCL);
-  lcd.init();
-  delay(1000);
-  lcd.backlight(); // Asegurar que la luz de fondo esté encendida
-  lcd.clear();
-  delay(100); // Espera para estabilizar el LCD y relés
+    // Inicializar el tiempo de la última ventilación programada
+    ultimoTiempoVentilacionProgramada = millis();
+    
+    Wire.begin(I2C_SDA, I2C_SCL);
+    lcd.init();
+    delay(100); //1000
+    lcd.backlight(); // Asegurar que la luz de fondo esté encendida
+    lcd.clear();
+    delay(100); // Espera para estabilizar el LCD y relés
 }
 
 // ---------------- LOOP PRINCIPAL ----------------
 void loop() {
 
-static unsigned long lastEncoderCheckTime = 0;
+  static unsigned long lastEncoderCheckTime = 0;
   if (millis() - lastEncoderCheckTime > RETARDO_ANTI_REBOTE_ENCODER) {
     leerEncoder(); // Llama siempre, o solo si flag==true
     lastEncoderCheckTime = millis();
@@ -471,7 +469,6 @@ static unsigned long lastEncoderCheckTime = 0;
         break;
 
     case ESTADO_MODO_FUNCIONAMIENTO:
-        // En este modo, el encoder no hace nada, solo el switch
         // Las actualizaciones de sensores y Firebase se manejan dentro de manejarModoFuncionamiento
         // para un control más fino. No necesitamos 'necesitaRefrescarLCD = true;' aquí
         // a menos que sea para una transición de estado, lo cual ya se maneja arriba.
@@ -957,7 +954,7 @@ void leerSensores() {
     abs(currentHum - lastHumFirebase) > 2.0 ||
     abs(currentCO2 - lastCO2Firebase) > 50) {
 
-    firebase.sendData(currentTemp, currentHum, currentCO2);
+    firebase.sendData(currentTemp, currentHum, (int)currentCO2);
 
     lastTempFirebase = currentTemp;
     lastHumFirebase = currentHum;
@@ -1297,9 +1294,7 @@ unsigned long currentMillis = millis();
             necesitaRefrescarLCD = true;
         }
     }
-//////////////////////////////////////
-
-    
+    //////////////////////////////////////
     // Si las alarmas están silenciadas y hay alarmas activas, mostrar mensaje especial
     String avisosTemp = "";
     obtenerAlarmasActivas(avisosTemp);
@@ -1349,101 +1344,6 @@ unsigned long currentMillis = millis();
 
 
 
-
-// ---------------- FUNCIONES EEPROM ----------------
-void guardarSetpointsEEPROM() {
-  EEPROM.begin(EEPROM_SIZE);
-  int addr = 0;
-  EEPROM.put(addr, setpointTemperatura); addr += sizeof(float);
-  EEPROM.put(addr, setpointHumedad);     addr += sizeof(float);
-  EEPROM.put(addr, setpointCO2);         addr += sizeof(int);
-
-  EEPROM.put(addr, alarmaTempMin);       addr += sizeof(float);
-  EEPROM.put(addr, alarmaTempMax);       addr += sizeof(float);
-  EEPROM.put(addr, alarmaHumMin);        addr += sizeof(float);
-  EEPROM.put(addr, alarmaHumMax);        addr += sizeof(float);
-  EEPROM.put(addr, alarmaCO2Min);        addr += sizeof(int);
-  EEPROM.put(addr, alarmaCO2Max);        addr += sizeof(int);
-
-  EEPROM.commit();
-  EEPROM.end();
-  Serial.println("Setpoints y Alarmas guardados en EEPROM.");
-}
-
-void cargarSetpointsEEPROM() {
-  EEPROM.begin(EEPROM_SIZE);
-  int addr = 0;
-  EEPROM.get(addr, setpointTemperatura); addr += sizeof(float);
-  EEPROM.get(addr, setpointHumedad);     addr += sizeof(float);
-  EEPROM.get(addr, setpointCO2);         addr += sizeof(int);
-
-  EEPROM.get(addr, alarmaTempMin);       addr += sizeof(float);
-  EEPROM.get(addr, alarmaTempMax);       addr += sizeof(float);
-  EEPROM.get(addr, alarmaHumMin);        addr += sizeof(float);
-  EEPROM.get(addr, alarmaHumMax);        addr += sizeof(float);
-  EEPROM.get(addr, alarmaCO2Min);        addr += sizeof(int);
-  EEPROM.get(addr, alarmaCO2Max);        addr += sizeof(int);
-
-  EEPROM.end();
-
-  // Validaciones para Setpoints
-  if (setpointTemperatura < TEMP_MIN || setpointTemperatura > TEMP_MAX || isnan(setpointTemperatura)) {
-    setpointTemperatura = 25.0;
-  }
-  if (setpointHumedad < HUM_MIN || setpointHumedad > HUM_MAX || isnan(setpointHumedad)) {
-    setpointHumedad = 70.0;
-  }
-  if (setpointCO2 < CO2_MIN || setpointCO2 > CO2_MAX) { // Usar los nuevos rangos ampliados
-    setpointCO2 = 6000; // Nuevo valor por defecto
-  }
-
-  // Validaciones para Alarmas
-  if (alarmaTempMin < ALARMA_TEMP_MIN_RANGO || alarmaTempMin > ALARMA_TEMP_MAX_RANGO || isnan(alarmaTempMin)) {
-      alarmaTempMin = 18.0;
-  }
-  if (alarmaTempMax < ALARMA_TEMP_MIN_RANGO || alarmaTempMax > ALARMA_TEMP_MAX_RANGO || isnan(alarmaTempMax)) {
-      alarmaTempMax = 30.0;
-  }
-  if (alarmaHumMin < ALARMA_HUM_MIN_RANGO || alarmaHumMin > ALARMA_HUM_MAX_RANGO || isnan(alarmaHumMin)) {
-      alarmaHumMin = 50.0;
-  }
-  if (alarmaHumMax < ALARMA_HUM_MIN_RANGO || alarmaHumMax > ALARMA_HUM_MAX_RANGO || isnan(alarmaHumMax)) {
-      alarmaHumMax = 90.0;
-  }
-  if (alarmaCO2Min < ALARMA_CO2_MIN_RANGO || alarmaCO2Min > ALARMA_CO2_MAX_RANGO) { // Usar nuevos rangos
-      alarmaCO2Min = 600; // Por revisar con el usuario
-  }
-  if (alarmaCO2Max < ALARMA_CO2_MIN_RANGO || alarmaCO2Max > ALARMA_CO2_MAX_RANGO) { // Usar nuevos rangos
-      alarmaCO2Max = 1200; // Por revisar con el usuario
-  }
-
-  Serial.println("Setpoints y Alarmas cargados de EEPROM:");
-  Serial.printf("Temp: %.1f, Hum: %.1f, CO2: %d\n", setpointTemperatura, setpointHumedad, setpointCO2);
-  Serial.printf("Alarma Temp Min: %.1f, Max: %.1f\n", alarmaTempMin, alarmaTempMax);
-  Serial.printf("Alarma Hum Min: %.1f, Max: %.1f\n", alarmaHumMin, alarmaHumMax);
-  Serial.printf("Alarma CO2 Min: %d, Max: %d\n", alarmaCO2Min, alarmaCO2Max);
-}
-
-// *** Nueva función para guardar el estado de la aplicación en EEPROM ***
-void guardarEstadoAppEEPROM() {
-    EEPROM.begin(EEPROM_SIZE);
-    EEPROM.put(EEPROM_APP_STATE_ADDR, (uint8_t)(estadoActualApp == ESTADO_MODO_FUNCIONAMIENTO ? 1 : 0));
-    EEPROM.commit();
-    EEPROM.end();
-    Serial.printf("Estado de app guardado en EEPROM: %d\n", lastAppStateFlag);
-}
-
-// *** Nueva función para cargar el estado de la aplicación desde EEPROM ***
-void cargarEstadoAppEEPROM() {
-    EEPROM.begin(EEPROM_SIZE);
-    EEPROM.get(EEPROM_APP_STATE_ADDR, lastAppStateFlag);
-    EEPROM.end();
-    // Validar si el valor es consistente (0 o 1)
-    if (lastAppStateFlag != 0 && lastAppStateFlag != 1) {
-        lastAppStateFlag = 0; // Por defecto, si es inconsistente, ir al menú
-    }
-    Serial.printf("Estado de app cargado de EEPROM: %d\n", lastAppStateFlag);
-}
 
 
 void manejarEditarTemperatura(int deltaEncoder, bool pulsadoSwitch) {
