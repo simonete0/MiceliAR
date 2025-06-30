@@ -146,7 +146,7 @@ void FirebaseDatos::guardarUltimoEstadoFirebase(const String& estado) {
     Firebase.RTDB.setString(&fbdo, "/Parametros/UltimoEstado/FechaHora", fechaHora);
 }
 
-bool FirebaseDatos::leerSetpointsFirebase(float &settemp, float &sethum, int &setco2) {
+/* bool FirebaseDatos::leerSetpointsFirebase(float &settemp, float &sethum, int &setco2) {
     bool ok = true;
     float t = settemp, h = sethum;
     int c = setco2;
@@ -172,9 +172,9 @@ bool FirebaseDatos::leerSetpointsFirebase(float &settemp, float &sethum, int &se
     
     Serial.printf("Setpoints: T=%.1f H=%.1f CO2=%d\n", settemp, sethum, setco2);
     return ok;
-}
+} */
 
-bool FirebaseDatos::leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, float &hmax, int &co2min, int &co2max) {
+/* bool FirebaseDatos::leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, float &hmax, int &co2min, int &co2max) {
     bool ok = true;
     float tmi = tmin, tma = tmax, hmi = hmin, hma = hmax;
     int cmi = co2min, cma = co2max;
@@ -219,15 +219,15 @@ bool FirebaseDatos::leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, f
     Serial.printf("Alarmas: Tmin=%.1f Tmax=%.1f Hmin=%.1f Hmax=%.1f CO2min=%d CO2max=%d\n",
     tmin, tmax, hmin, hmax, co2min, co2max);
     return ok;
-}
+} */
 
-bool FirebaseDatos::leerUltimoEstadoFirebase(String &estado) {
+/* bool FirebaseDatos::leerUltimoEstadoFirebase(String &estado) {
     if (Firebase.RTDB.getString(&fbdo, "/Parametros/UltimoEstado/Estado")) {
         estado = fbdo.stringData();
     }
     return true;
-}
-bool FirebaseDatos::leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHum, float &ultimaCO2) {
+} */
+/* bool FirebaseDatos::leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHum, float &ultimaCO2) {
     bool ok = true;
     if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/temperatura")) {
         ultimaTemp = fbdo.floatData();
@@ -241,6 +241,140 @@ bool FirebaseDatos::leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHu
     }
     if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/co2")) {
         ultimaCO2 = fbdo.floatData();
+    } else {
+        ok = false;
+    }
+    return ok;
+} */
+float extraerNumeroDeString(const String& valor) {
+    String limpio = valor;
+    limpio.trim();
+    // Quitar comillas si las tiene
+    if (limpio.startsWith("\"") && limpio.endsWith("\"")) {
+        limpio = limpio.substring(1, limpio.length() - 1);
+    }
+    return limpio.toFloat();
+}
+
+int extraerEnteroDeString(const String& valor) {
+    String limpio = valor;
+    limpio.trim();
+    if (limpio.startsWith("\"") && limpio.endsWith("\"")) {
+        limpio = limpio.substring(1, limpio.length() - 1);
+    }
+    return limpio.toInt();
+}
+
+String limpiarComillas(const String& valor) {
+    String limpio = valor;
+    limpio.trim();
+    if (limpio.startsWith("\"") && limpio.endsWith("\"")) {
+        limpio = limpio.substring(1, limpio.length() - 1);
+    }
+    return limpio;
+}
+bool FirebaseDatos::leerSetpointsFirebase(float &temp, float &hum, int &co2) {
+    bool ok = true;
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Setpoints/Temp")) {
+        temp = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Setpoints/Temp")) {
+        temp = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Setpoints/Hum")) {
+        hum = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Setpoints/Hum")) {
+        hum = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Setpoints/CO2")) {
+        co2 = fbdo.intData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Setpoints/CO2")) {
+        co2 = extraerEnteroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    return ok;
+}
+
+
+bool FirebaseDatos::leerAlarmasFirebase(float &tmin, float &tmax, float &hmin, float &hmax, int &co2min, int &co2max) {
+    bool ok = true;
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/TempMin")) {
+        tmin = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/TempMin")) {
+        tmin = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/TempMax")) {
+        tmax = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/TempMax")) {
+        tmax = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/HumMin")) {
+        hmin = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/HumMin")) {
+        hmin = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/Parametros/Alarmas/HumMax")) {
+        hmax = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/HumMax")) {
+        hmax = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Alarmas/CO2Min")) {
+        co2min = fbdo.intData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/CO2Min")) {
+        co2min = extraerEnteroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getInt(&fbdo, "/Parametros/Alarmas/CO2Max")) {
+        co2max = fbdo.intData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/Parametros/Alarmas/CO2Max")) {
+        co2max = extraerEnteroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    return ok;
+}
+
+bool FirebaseDatos::leerUltimoEstadoFirebase(String &estado) {
+    if (Firebase.RTDB.getString(&fbdo, "/Parametros/UltimoEstado/Estado")) {
+        estado = limpiarComillas(fbdo.stringData());
+        return true;
+    }
+    return false;
+}
+
+bool FirebaseDatos::leerUltimaLecturaFirebase(float &ultimaTemp, float &ultimaHum, float &ultimaCO2) {
+    bool ok = true;
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/temperatura")) {
+        ultimaTemp = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/ultima_lectura/temperatura")) {
+        ultimaTemp = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/humedad")) {
+        ultimaHum = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/ultima_lectura/humedad")) {
+        ultimaHum = extraerNumeroDeString(fbdo.stringData());
+    } else {
+        ok = false;
+    }
+    if (Firebase.RTDB.getFloat(&fbdo, "/ultima_lectura/co2")) {
+        ultimaCO2 = fbdo.floatData();
+    } else if (Firebase.RTDB.getString(&fbdo, "/ultima_lectura/co2")) {
+        ultimaCO2 = extraerNumeroDeString(fbdo.stringData());
     } else {
         ok = false;
     }

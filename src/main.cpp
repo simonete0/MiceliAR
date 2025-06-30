@@ -161,13 +161,13 @@ float lastHumFirebase = -999.0;
 float lastCO2Firebase = -999.0;
 
 
-// ETIQUETA: Variables para 'Modo Funcionamiento'
+// Variables para 'Modo Funcionamiento'
 float currentTemp, currentHum, currentCO2;
 float lastDisplayedTemp = -999.0; // Inicializar a un valor imposible para forzar la primera visualización
 float lastDisplayedHum = -999.0;
 float lastDisplayedCO2 = -999.0;
 
-// Umbrales para actualizar la pantalla (ajustar según necesidad)
+// Umbrales para actualizar la pantalla 
 const float TEMP_DISPLAY_THRESHOLD = 0.2; // Cambio de 0.2 C
 const float HUM_DISPLAY_THRESHOLD = 1.0;  // Cambio de 1%
 const int CO2_DISPLAY_THRESHOLD = 20;     // Cambio de 20 ppm (según la última indicación del usuario)
@@ -228,9 +228,8 @@ bool pantallaEditSetMostrada = false;
 // Nueva bandera para CO2 bajo
 bool banderaBajoCO2 = false;
 
-// Variable para el estado guardado en EEPROM
-// 0: Modo Menu, 1: Modo Funcionamiento
-uint8_t lastAppStateFlag = 0;
+static bool alarmaMostrada = false;
+static bool alarmaActiva = false;
 
 // ---------------- PROTOTIPOS DE FUNCIONES ----------------
 void IRAM_ATTR leerEncoderISR();
@@ -319,18 +318,10 @@ void setup() {
         }
     }  
 
-    // Si el último estado guardado fue "Modo Funcionamiento", inicia en ese estado
-    if (lastAppStateFlag == 1) {
-        estadoActualApp = ESTADO_MODO_FUNCIONAMIENTO;
-    } else {
-        estadoActualApp = ESTADO_MENU_PRINCIPAL;
-    }
+   
     
     necesitaRefrescarLCD = true;
-    // No resetear indiceMenuPrincipal si se carga de EEPROM y se va a Modo Funcionamiento
-    if (estadoActualApp == ESTADO_MENU_PRINCIPAL) {
-        indiceMenuPrincipal = 0;
-    }
+   
 
     // Leer última lectura de Firebase para inicializar los valores de comparación
     float ultimaTemp = -999.0, ultimaHum = -999.0, ultimaCO2 = -999.0;
@@ -1273,10 +1264,10 @@ unsigned long currentMillis = millis();
       alarmasPrevias = avisos;
 
     // Si hay un cambio en las alarmas activas, desilenciar automáticamente
-    if (cambioAlarmas && alarmasSilenciadas) {
-        alarmasSilenciadas = false;
-        mostrarAvisoAlarma = false;
-        necesitaRefrescarLCD = true;
+    if (avisos.length() == 0 && alarmasSilenciadas) {
+      alarmasSilenciadas = false;
+      mostrarAvisoAlarma = false;
+      necesitaRefrescarLCD = true;
     }
 
     // Si el usuario gira el encoder
